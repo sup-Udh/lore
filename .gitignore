@@ -1,1 +1,3 @@
 /target
+# ingore everything inside models folder
+/models/*
