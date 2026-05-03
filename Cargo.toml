@@ -9,3 +9,4 @@ candle-core = "0.10.2"
 candle-transformers = "0.10.2"
 tokenizers = "0.22.2"
 clap = { version = "4.0", features = ["derive"] }
+colored = "2.1"

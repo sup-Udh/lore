@@ -4,8 +4,9 @@ use candle_core::quantized::gguf_file;
 use candle_transformers::models::quantized_qwen2::ModelWeights as QwenWeights;
 use candle_transformers::models::quantized_phi3::ModelWeights as Phi3Weights;
 use tokenizers::Tokenizer; 
-use std::io::Write;
+use std::io::{self, Write};
 use clap::{Parser, Subcommand, ValueEnum};
+use colored::*;
 
 #[derive(Parser)]
 #[command(name = "lore", about = "Local LLM CLI", version = "0.1.0")]
@@ -16,13 +17,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start a chat with a specific model
+    /// Enter interactive chat mode
     Chat {
         #[arg(short, long, value_enum, default_value = "qwen")]
         model: ModelChoice,
-
-        #[arg(short, long)]
-        prompt: String,
     },
 }
 
@@ -36,15 +34,23 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let device = Device::Cpu;
 
+    // 🎨 ASCII ART SPLASH
+    println!("{}", r#"
+    ██╗      ██████╗ ██████╗ ███████╗
+    ██║     ██╔═══██╗██╔══██╗██╔════╝
+    ██║     ██║   ██║██████╔╝█████╗  
+    ██║     ██║   ██║██╔══██╗██╔══╝  
+    ███████╗╚██████╔╝██║  ██║███████╗
+    ╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝
+    "# .cyan().bold());
+    println!("{}", "--- Local Intelligence Engine Initialized ---".black().on_white());
+
     match cli.command {
-        Commands::Chat { model, prompt } => {
-            match model {
-                ModelChoice::Qwen => run_qwen(&device, &prompt)?,
-                ModelChoice::Phi3 => {
-                    // Wrap Phi-3 prompt in its specific instruct template
-                    let instruct_prompt = format!("<|user|>\n{}<|end|>\n<|assistant|>", prompt);
-                    run_phi3(&device, &instruct_prompt)?;
-                }
+        Commands::Chat { model } => {
+            if model == ModelChoice::Qwen {
+                run_chat_qwen(&device)?;
+            } else {
+                run_chat_phi3(&device)?;
             }
         }
     }
@@ -52,81 +58,84 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn run_phi3(device: &Device, prompt: &str) -> Result<()> {
-    let tokenizer = Tokenizer::from_file("models/phi3_tokenizer.json").map_err(E::msg)?;
-    let model_path = "models/phi3-mini-4k-instruct-q4.gguf";
-    
-    let mut file = std::fs::File::open(model_path)
-        .map_err(|_| E::msg(format!("Could not find Phi-3 model file at {}", model_path)))?;
-
-    let content = gguf_file::Content::read(&mut file)?;
-    let mut model = Phi3Weights::from_gguf(false, content, &mut file, &device)?;
-
-    let tokens = tokenizer.encode(prompt, true).map_err(E::msg)?;
-    let prompt_tokens = tokens.get_ids();
-
-    println!("--- 🤖 Lore (Phi-3) ---\n");
-
-    let input = Tensor::new(prompt_tokens, &device)?.unsqueeze(0)?;
-    let logits = model.forward(&input, 0)?; 
-
-    let mut next_token = get_next_token(&logits)?;
-    print!("{}", tokenizer.decode(&[next_token], true).map_err(E::msg)?);
-    std::io::stdout().flush()?;
-
-    for i in 0..500 {
-        let input = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
-        let pos = prompt_tokens.len() + i;
-        let logits = model.forward(&input, pos)?;
-        next_token = get_next_token(&logits)?;
-
-        if next_token == 32000 || next_token == 32007 { break; }
-
-        let word = tokenizer.decode(&[next_token], true).map_err(E::msg)?;
-        print!("{}", word);
-        std::io::stdout().flush()?;
-    }
-
-    println!("\n");
-    Ok(())
-}
-
-fn run_qwen(device: &Device, prompt: &str) -> Result<()> {
+fn run_chat_qwen(device: &Device) -> Result<()> {
+    println!("{}", "Loading Qwen 2.5...".yellow());
     let tokenizer = Tokenizer::from_file("models/tokenizer.json").map_err(E::msg)?;
     let model_path = "models/qwen2.5-1.5b-instruct-q4_k_m.gguf";
-
-    let mut file = std::fs::File::open(model_path)
-        .map_err(|_| E::msg(format!("Could not find Qwen model file at {}", model_path)))?;
-
+    let mut file = std::fs::File::open(model_path)?;
     let content = gguf_file::Content::read(&mut file)?;
     let mut model = QwenWeights::from_gguf(content, &mut file, &device)?;
 
-    let tokens = tokenizer.encode(prompt, true).map_err(E::msg)?;
-    let prompt_tokens = tokens.get_ids();
+    chat_loop(device, tokenizer, |t, p| model.forward(t, p), vec![151643, 151645], "Qwen")
+}
 
-    println!("--- 🤖 Lore (Qwen 2.5) ---\n");
+fn run_chat_phi3(device: &Device) -> Result<()> {
+    println!("{}", "Loading Phi-3...".yellow());
+    let tokenizer = Tokenizer::from_file("models/phi3_tokenizer.json").map_err(E::msg)?;
+    let model_path = "models/phi3-mini-4k-instruct-q4.gguf";
+    let mut file = std::fs::File::open(model_path)?;
+    let content = gguf_file::Content::read(&mut file)?;
+    let mut model = Phi3Weights::from_gguf(false, content, &mut file, &device)?;
 
-    let input = Tensor::new(prompt_tokens, &device)?.unsqueeze(0)?;
-    let logits = model.forward(&input, 0)?;
+    chat_loop(device, tokenizer, |t, p| model.forward(t, p), vec![32000, 32007], "Phi-3")
+}
 
-    let mut next_token = get_next_token(&logits)?;
-    print!("{}", tokenizer.decode(&[next_token], true).map_err(E::msg)?);
-    std::io::stdout().flush()?;
+// 🔁 GENERAL CHAT LOOP
+fn chat_loop<F>(
+    device: &Device, 
+    tokenizer: Tokenizer, 
+    mut forward: F, 
+    eos_tokens: Vec<u32>,
+    model_name: &str
+) -> Result<()> 
+where F: FnMut(&Tensor, usize) -> candle_core::Result<Tensor> 
+{
+    println!("{} Mode Active. Type 'exit' to quit.", model_name.green());
+    let mut total_pos = 0;
 
-    for i in 0..500 {
-        let input = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
-        let pos = prompt_tokens.len() + i;
-        let logits = model.forward(&input, pos)?;
-        next_token = get_next_token(&logits)?;
+    loop {
+        print!("\n{} > ", "You".blue().bold());
+        io::stdout().flush()?;
 
-        if next_token == 151643 || next_token == 151645 { break; }
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let input = input.trim();
 
-        let word = tokenizer.decode(&[next_token], true).map_err(E::msg)?;
-        print!("{}", word);
-        std::io::stdout().flush()?;
+        if input == "exit" { break; }
+        if input.is_empty() { continue; }
+
+        // Formatting for instruction models
+        let formatted_input = if model_name == "Phi-3" {
+            format!("<|user|>\n{}<|end|>\n<|assistant|>", input)
+        } else {
+            format!("<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", input)
+        };
+
+        let tokens = tokenizer.encode(formatted_input, true).map_err(E::msg)?;
+        let prompt_tokens = tokens.get_ids();
+        
+        print!("\n{}: ", model_name.purple().bold());
+        
+        let mut tokens_to_process = prompt_tokens.to_vec();
+        
+        // Generation
+        for i in 0..500 {
+            let input_tensor = Tensor::new(tokens_to_process.as_slice(), device)?.unsqueeze(0)?;
+            let logits = forward(&input_tensor, total_pos)?;
+            total_pos += tokens_to_process.len();
+            
+            let next_token = get_next_token(&logits)?;
+            
+            if eos_tokens.contains(&next_token) { break; }
+
+            let word = tokenizer.decode(&[next_token], true).map_err(E::msg)?;
+            print!("{}", word);
+            io::stdout().flush()?;
+
+            tokens_to_process = vec![next_token];
+        }
+        println!();
     }
-
-    println!("\n");
     Ok(())
 }
 
