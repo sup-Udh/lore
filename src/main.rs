@@ -17,9 +17,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Enter interactive chat mode
     Chat {
         #[arg(short, long, value_enum, default_value = "qwen")]
+        // sub commands
         model: ModelChoice,
     },
 }
@@ -45,6 +45,8 @@ fn main() -> Result<()> {
     "# .cyan().bold());
     println!("{}", "--- Local Intelligence Engine Initialized ---".black().on_white());
 
+    // running required model here.
+
     match cli.command {
         Commands::Chat { model } => {
             if model == ModelChoice::Qwen {
@@ -58,6 +60,8 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+
+// run qwen chat model here (function)
 fn run_chat_qwen(device: &Device) -> Result<()> {
     println!("{}", "Loading Qwen 2.5...".yellow());
     let tokenizer = Tokenizer::from_file("models/tokenizer.json").map_err(E::msg)?;
@@ -69,6 +73,9 @@ fn run_chat_qwen(device: &Device) -> Result<()> {
     chat_loop(device, tokenizer, |t, p| model.forward(t, p), vec![151643, 151645], "Qwen")
 }
 
+
+
+// run phi chat model here (funtion)
 fn run_chat_phi3(device: &Device) -> Result<()> {
     println!("{}", "Loading Phi-3...".yellow());
     let tokenizer = Tokenizer::from_file("models/phi3_tokenizer.json").map_err(E::msg)?;
@@ -80,7 +87,7 @@ fn run_chat_phi3(device: &Device) -> Result<()> {
     chat_loop(device, tokenizer, |t, p| model.forward(t, p), vec![32000, 32007], "Phi-3")
 }
 
-// 🔁 GENERAL CHAT LOOP
+// main chap loop funtion
 fn chat_loop<F>(
     device: &Device, 
     tokenizer: Tokenizer, 
@@ -139,6 +146,8 @@ where F: FnMut(&Tensor, usize) -> candle_core::Result<Tensor>
     Ok(())
 }
 
+
+// token generator
 fn get_next_token(logits: &Tensor) -> Result<u32> {
     let shape = logits.dims();
     let last_row = match shape.len() {
