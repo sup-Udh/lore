@@ -91,7 +91,6 @@ fn run_chat_phi3(device: &Device) -> Result<()> {
 
 // mistral function here: 
 
-
 // main chap loop funtion
 fn chat_loop<F>(
     device: &Device, 
