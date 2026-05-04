@@ -90,7 +90,21 @@ fn run_chat_phi3(device: &Device) -> Result<()> {
 
 
 // mistral function here: 
+fn run_chat_mistral(device: &Device) -> Result<()> {
+    println!("{}", "Loading Mistral 7B v0.3...".yellow());
 
+    let tokenizer = Tokenizer::from_file("models/mistral_tokenizer.json").map_err(E::msg)?;
+
+    let model_path = "models/mistral-7b-v0.3-q4_k_m.gguf";
+    let mut file = std::fs::File::open(model_path)?;
+
+    let content = gguf_file::Content::read(&mut file)?;
+
+    let mut model = MistralWeights::from_gguf(content, &mut file, &device)?;
+
+    chat_loop(device, tokenizer, |t, p| model.forward(t, p), vec![2], "Mistral")
+
+}
 // main chap loop funtion
 fn chat_loop<F>(
     device: &Device, 
