@@ -64,9 +64,9 @@ fn run_chat_qwen(device: &Device) -> Result<()> {
     let model_path = "models/qwen2.5-1.5b-instruct-q4_k_m.gguf";
     let mut file = std::fs::File::open(model_path)?;
     let content = gguf_file::Content::read(&mut file)?;
-    let mut model = QwenWeights::from_gguf(content, &mut file, &device)?;
+    let mut model = QwenWeights::from_gguf(content, &mut file, device)?;
 
-    chat_loop(device, tokenizer, |t, p| model.forward(t, p), vec![151643, 151645], "Qwen")
+    chat_loop(device, tokenizer, &mut model, vec![151643, 151645], "Qwen")
 }
 
 fn run_chat_phi3(device: &Device) -> Result<()> {
@@ -75,31 +75,52 @@ fn run_chat_phi3(device: &Device) -> Result<()> {
     let model_path = "models/phi3-mini-4k-instruct-q4.gguf";
     let mut file = std::fs::File::open(model_path)?;
     let content = gguf_file::Content::read(&mut file)?;
-    let mut model = Phi3Weights::from_gguf(false, content, &mut file, &device)?;
+    let mut model = Phi3Weights::from_gguf(false, content, &mut file, device)?;
 
-    chat_loop(device, tokenizer, |t, p| model.forward(t, p), vec![32000, 32007], "Phi-3")
+    chat_loop(device, tokenizer, &mut model, vec![32000, 32007], "Phi-3")
 }
 
 fn run_chat_mistral(device: &Device) -> Result<()> {
     println!("{}", "Loading Mistral 7B v0.3...".yellow());
     let tokenizer = Tokenizer::from_file("models/mistral_tokenizer.json").map_err(E::msg)?;
-    // Ensure the filename matches exactly what is in your models folder
     let model_path = "models/mistral-7b-v0.3.gguf"; 
     let mut file = std::fs::File::open(model_path)?;
     let content = gguf_file::Content::read(&mut file)?;
-    let mut model = MistralWeights::from_gguf(content, &mut file, &device)?;
+    let mut model = MistralWeights::from_gguf(content, &mut file, device)?;
 
-    chat_loop(device, tokenizer, |t, p| model.forward(t, p), vec![2, 28723], "Mistral")
+    chat_loop(device, tokenizer, &mut model, vec![2, 28723], "Mistral")
 }
 
-fn chat_loop<F>(
+// Updated Trait to allow different models to use the same loop with KV Cache
+trait Model {
+    fn forward(&mut self, tensor: &Tensor, pos: usize) -> candle_core::Result<Tensor>;
+}
+
+impl Model for QwenWeights {
+    fn forward(&mut self, tensor: &Tensor, pos: usize) -> candle_core::Result<Tensor> {
+        self.forward(tensor, pos)
+    }
+}
+
+impl Model for Phi3Weights {
+    fn forward(&mut self, tensor: &Tensor, pos: usize) -> candle_core::Result<Tensor> {
+        self.forward(tensor, pos)
+    }
+}
+
+impl Model for MistralWeights {
+    fn forward(&mut self, tensor: &Tensor, pos: usize) -> candle_core::Result<Tensor> {
+        self.forward(tensor, pos)
+    }
+}
+
+fn chat_loop<M: Model>(
     device: &Device, 
     tokenizer: Tokenizer, 
-    mut forward: F, 
+    model: &mut M, 
     eos_tokens: Vec<u32>,
     model_name: &str
 ) -> Result<()> 
-where F: FnMut(&Tensor, usize) -> candle_core::Result<Tensor> 
 {
     println!("{} Mode Active. Type 'exit' to quit.", model_name.green());
     let mut total_pos = 0;
@@ -127,25 +148,28 @@ where F: FnMut(&Tensor, usize) -> candle_core::Result<Tensor>
         print!("\n{}: ", model_name.purple().bold());
         
         let mut tokens_to_process = prompt_tokens.to_vec();
-        
-        // Use a persistent decoder state to handle spacing correctly
         let mut decoder = TokenOutputStream::new(tokenizer.clone());
 
         for _ in 0..500 {
             let input_tensor = Tensor::new(tokens_to_process.as_slice(), device)?.unsqueeze(0)?;
-            let logits = forward(&input_tensor, total_pos)?;
+            
+            // KV CACHE LOGIC: 
+            // The model weights update their internal cache based on total_pos.
+            let logits = model.forward(&input_tensor, total_pos)?;
+            
+            // Advance the position by the number of tokens we just processed
             total_pos += tokens_to_process.len();
             
             let next_token = get_next_token(&logits)?;
-            
             if eos_tokens.contains(&next_token) { break; }
 
-            // Fix Spacing: Use a streaming decoder approach
             if let Some(t) = decoder.next_token(next_token)? {
                 print!("{}", t);
                 io::stdout().flush()?;
             }
 
+            // KV CACHE LOGIC: 
+            // After the first prompt pass, we only feed the single NEXT token back in.
             tokens_to_process = vec![next_token];
         }
         println!();
@@ -164,7 +188,6 @@ fn get_next_token(logits: &Tensor) -> Result<u32> {
     Ok(next_id)
 }
 
-/// Helper struct to handle the "missing space" issue in token streaming
 struct TokenOutputStream {
     tokenizer: Tokenizer,
     tokens: Vec<u32>,
