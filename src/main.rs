@@ -3,6 +3,7 @@ use candle_core::{Device, Tensor};
 use candle_core::quantized::gguf_file;
 use candle_transformers::models::quantized_qwen2::ModelWeights as QwenWeights;
 use candle_transformers::models::quantized_phi3::ModelWeights as Phi3Weights;
+use candle_transformers::models::quantized_llama::ModelWeights as MistralWeights;
 use tokenizers::Tokenizer; 
 use std::io::{self, Write};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -87,6 +88,10 @@ fn run_chat_phi3(device: &Device) -> Result<()> {
     chat_loop(device, tokenizer, |t, p| model.forward(t, p), vec![32000, 32007], "Phi-3")
 }
 
+
+fn run_mistral(device: &Device) -> Result<()> {
+    println!("Mistral function loading")
+}
 // main chap loop funtion
 fn chat_loop<F>(
     device: &Device, 
