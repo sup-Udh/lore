@@ -7,6 +7,8 @@ use tokenizers::Tokenizer;
 use anyhow::{Result};
 use crate::Model;
 
+
+// getting prompt service here
 #[derive(Deserialize)]
 pub struct ChatRequest {
     pub prompt: String,
@@ -29,14 +31,15 @@ pub struct AppState {
 
 async fn chat_handler(
     State(state): State<Arc<AppState>>,
-    Json(payload): Json<ChatRequest>,
+    Json(payload): Json<ChatRequest>, // used for extracting the json prompt given by the user
 ) -> Json<ChatResponse> {
+    // debug
     println!("API Hit ({}): {}", state.model_name, payload.prompt);
 
     let formatted = match state.model_name.as_str() {
         "Phi-3"   => format!("<|user|>\n{}<|end|>\n<|assistant|>", payload.prompt),
         "Mistral" => format!("<s>[INST] {} [/INST]", payload.prompt),
-        _         => format!("<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", payload.prompt),
+        _         => format!("<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", payload.prompt), // default qwen load
     };
 
     let tokens = state.tokenizer.encode(formatted, true).unwrap();
@@ -69,6 +72,9 @@ async fn chat_handler(
     Json(ChatResponse { response: response_text })
 }
 
+
+// token logic
+
 fn get_next_token(logits: &Tensor) -> Result<u32> {
     let shape = logits.dims();
     let last_row = match shape.len() {
@@ -78,6 +84,8 @@ fn get_next_token(logits: &Tensor) -> Result<u32> {
     };
     Ok(last_row.argmax(0)?.to_scalar::<u32>()?)
 }
+
+// server running 
 
 pub async fn start_api(
     model: Box<dyn Model + Send>,
