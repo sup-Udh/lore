@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use candle_core::{Device, Tensor};
 use tokenizers::Tokenizer;
-use anyhow::{Error as E, Result};
+use anyhow::{Result};
 use crate::Model;
 
 #[derive(Deserialize)]
@@ -15,10 +15,12 @@ pub struct ChatRequest {
 #[derive(Serialize)]
 pub struct ChatResponse {
     pub response: String,
+
 }
 
+// main api state
 pub struct AppState {
-    pub model: Mutex<Box<dyn Model + Send>>,
+    pub model: Mutex<Box<dyn Model + Send>>, // this can help the app to take multiple requestsss
     pub tokenizer: Tokenizer,
     pub device: Device,
     pub eos_tokens: Vec<u32>,

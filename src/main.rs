@@ -11,7 +11,8 @@ use std::io::{self, Write};
 use clap::{Parser, Subcommand, ValueEnum};
 use colored::*;
 
-// Trait so api/mod.rs can hold any model behind a Box<dyn Model>
+
+//  major traits models (common end point)
 pub trait Model {
     fn forward(&mut self, input: &Tensor, pos: usize) -> candle_core::Result<Tensor>;
 }
@@ -37,6 +38,8 @@ impl Model for MistralModel {
     }
 }
 
+
+// cli implemenation
 #[derive(Parser)]
 #[command(name = "lore", about = "Local LLM CLI", version = "0.1.0")]
 struct Cli {
@@ -64,6 +67,8 @@ enum ModelChoice {
 }
 
 #[tokio::main]
+
+// main async function to call out different commands and run required models
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let device = Device::Cpu;
@@ -98,7 +103,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-// ── Chat runners (unchanged) ─────────────────────────────────────────────────
+// ── Chat runners  ─────────────────────────────────────────────────
 
 fn run_chat_qwen(device: &Device) -> Result<()> {
     println!("{}", "Loading Qwen 2.5...".yellow());
@@ -130,7 +135,7 @@ fn run_chat_mistral(device: &Device) -> Result<()> {
     chat_loop(device, tokenizer, |t, p| model.forward(t, p), vec![2, 28723], "Mistral")
 }
 
-// ── Serve runners (new) ──────────────────────────────────────────────────────
+// ── Serve runners  ──────────────────────────────────────────────────────
 
 async fn run_serve_qwen(device: &Device) -> Result<()> {
     println!("{}", "Loading Qwen 2.5 for API server...".yellow());
@@ -165,8 +170,8 @@ async fn run_serve_mistral(device: &Device) -> Result<()> {
     Ok(())
 }
 
-// ── Shared chat loop (unchanged) ─────────────────────────────────────────────
-
+// ── Shared chat loop  ─────────────────────────────────────────────
+// temp ram and memeory usage
 fn chat_loop<F>(
     device: &Device,
     tokenizer: Tokenizer,
