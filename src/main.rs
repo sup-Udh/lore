@@ -29,6 +29,7 @@ enum Commands {
 enum ModelChoice {
     Qwen,
     Phi3,
+    Mistral,
 }
 
 fn main() -> Result<()> {
@@ -52,7 +53,10 @@ fn main() -> Result<()> {
         Commands::Chat { model } => {
             if model == ModelChoice::Qwen {
                 run_chat_qwen(&device)?;
-            } else {
+            } else if model == ModelChoice::Mistral {
+                run_chat_mistral(&device)?;
+            } 
+            else {
                 run_chat_phi3(&device)?;
             }
         }
@@ -95,7 +99,7 @@ fn run_chat_mistral(device: &Device) -> Result<()> {
 
     let tokenizer = Tokenizer::from_file("models/mistral_tokenizer.json").map_err(E::msg)?;
 
-    let model_path = "models/mistral-7b-v0.3-q4_k_m.gguf";
+    let model_path = "models/mistral-7b-v0.3.gguf";
     let mut file = std::fs::File::open(model_path)?;
 
     let content = gguf_file::Content::read(&mut file)?;
@@ -132,7 +136,11 @@ where F: FnMut(&Tensor, usize) -> candle_core::Result<Tensor>
         // Formatting for instruction models
         let formatted_input = if model_name == "Phi-3" {
             format!("<|user|>\n{}<|end|>\n<|assistant|>", input)
-        } else {
+
+        }else if model_name == "Mistral" {
+            format!("<s>[INST] {} [/INST]", input)
+        } 
+        else {
             format!("<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", input)
         };
 
