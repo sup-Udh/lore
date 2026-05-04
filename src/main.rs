@@ -1,13 +1,41 @@
+mod api;
+
 use anyhow::{Error as E, Result};
 use candle_core::{Device, Tensor};
 use candle_core::quantized::gguf_file;
 use candle_transformers::models::quantized_qwen2::ModelWeights as QwenWeights;
 use candle_transformers::models::quantized_phi3::ModelWeights as Phi3Weights;
 use candle_transformers::models::quantized_llama::ModelWeights as MistralWeights;
-use tokenizers::Tokenizer; 
+use tokenizers::Tokenizer;
 use std::io::{self, Write};
 use clap::{Parser, Subcommand, ValueEnum};
 use colored::*;
+
+// Trait so api/mod.rs can hold any model behind a Box<dyn Model>
+pub trait Model {
+    fn forward(&mut self, input: &Tensor, pos: usize) -> candle_core::Result<Tensor>;
+}
+
+struct QwenModel(QwenWeights);
+impl Model for QwenModel {
+    fn forward(&mut self, input: &Tensor, pos: usize) -> candle_core::Result<Tensor> {
+        self.0.forward(input, pos)
+    }
+}
+
+struct Phi3Model(Phi3Weights);
+impl Model for Phi3Model {
+    fn forward(&mut self, input: &Tensor, pos: usize) -> candle_core::Result<Tensor> {
+        self.0.forward(input, pos)
+    }
+}
+
+struct MistralModel(MistralWeights);
+impl Model for MistralModel {
+    fn forward(&mut self, input: &Tensor, pos: usize) -> candle_core::Result<Tensor> {
+        self.0.forward(input, pos)
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "lore", about = "Local LLM CLI", version = "0.1.0")]
@@ -22,6 +50,10 @@ enum Commands {
         #[arg(short, long, value_enum, default_value = "qwen")]
         model: ModelChoice,
     },
+    Serve {
+        #[arg(short, long, value_enum, default_value = "qwen")]
+        model: ModelChoice,
+    },
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -31,15 +63,16 @@ enum ModelChoice {
     Mistral,
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
     let device = Device::Cpu;
 
     println!("{}", r#"
     ██╗      ██████╗ ██████╗ ███████╗
     ██║     ██╔═══██╗██╔══██╗██╔════╝
-    ██║     ██║   ██║██████╔╝█████╗  
-    ██║     ██║   ██║██╔══██╗██╔══╝  
+    ██║     ██║   ██║██████╔╝█████╗
+    ██║     ██║   ██║██╔══██╗██╔══╝
     ███████╗╚██████╔╝██║  ██║███████╗
     ╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝
     "# .cyan().bold());
@@ -48,9 +81,16 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Chat { model } => {
             match model {
-                ModelChoice::Qwen => run_chat_qwen(&device)?,
+                ModelChoice::Qwen    => run_chat_qwen(&device)?,
                 ModelChoice::Mistral => run_chat_mistral(&device)?,
-                ModelChoice::Phi3 => run_chat_phi3(&device)?,
+                ModelChoice::Phi3    => run_chat_phi3(&device)?,
+            }
+        }
+        Commands::Serve { model } => {
+            match model {
+                ModelChoice::Qwen    => run_serve_qwen(&device).await?,
+                ModelChoice::Mistral => run_serve_mistral(&device).await?,
+                ModelChoice::Phi3    => run_serve_phi3(&device).await?,
             }
         }
     }
@@ -58,15 +98,16 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+// ── Chat runners (unchanged) ─────────────────────────────────────────────────
+
 fn run_chat_qwen(device: &Device) -> Result<()> {
     println!("{}", "Loading Qwen 2.5...".yellow());
     let tokenizer = Tokenizer::from_file("models/tokenizer.json").map_err(E::msg)?;
     let model_path = "models/qwen2.5-1.5b-instruct-q4_k_m.gguf";
     let mut file = std::fs::File::open(model_path)?;
     let content = gguf_file::Content::read(&mut file)?;
-    let mut model = QwenWeights::from_gguf(content, &mut file, device)?;
-
-    chat_loop(device, tokenizer, &mut model, vec![151643, 151645], "Qwen")
+    let mut model = QwenWeights::from_gguf(content, &mut file, &device)?;
+    chat_loop(device, tokenizer, |t, p| model.forward(t, p), vec![151643, 151645], "Qwen")
 }
 
 fn run_chat_phi3(device: &Device) -> Result<()> {
@@ -75,52 +116,66 @@ fn run_chat_phi3(device: &Device) -> Result<()> {
     let model_path = "models/phi3-mini-4k-instruct-q4.gguf";
     let mut file = std::fs::File::open(model_path)?;
     let content = gguf_file::Content::read(&mut file)?;
-    let mut model = Phi3Weights::from_gguf(false, content, &mut file, device)?;
-
-    chat_loop(device, tokenizer, &mut model, vec![32000, 32007], "Phi-3")
+    let mut model = Phi3Weights::from_gguf(false, content, &mut file, &device)?;
+    chat_loop(device, tokenizer, |t, p| model.forward(t, p), vec![32000, 32007], "Phi-3")
 }
 
 fn run_chat_mistral(device: &Device) -> Result<()> {
     println!("{}", "Loading Mistral 7B v0.3...".yellow());
     let tokenizer = Tokenizer::from_file("models/mistral_tokenizer.json").map_err(E::msg)?;
-    let model_path = "models/mistral-7b-v0.3.gguf"; 
+    let model_path = "models/mistral-7b-v0.3.gguf";
     let mut file = std::fs::File::open(model_path)?;
     let content = gguf_file::Content::read(&mut file)?;
-    let mut model = MistralWeights::from_gguf(content, &mut file, device)?;
-
-    chat_loop(device, tokenizer, &mut model, vec![2, 28723], "Mistral")
+    let mut model = MistralWeights::from_gguf(content, &mut file, &device)?;
+    chat_loop(device, tokenizer, |t, p| model.forward(t, p), vec![2, 28723], "Mistral")
 }
 
-// Updated Trait to allow different models to use the same loop with KV Cache
-trait Model {
-    fn forward(&mut self, tensor: &Tensor, pos: usize) -> candle_core::Result<Tensor>;
+// ── Serve runners (new) ──────────────────────────────────────────────────────
+
+async fn run_serve_qwen(device: &Device) -> Result<()> {
+    println!("{}", "Loading Qwen 2.5 for API server...".yellow());
+    let tokenizer = Tokenizer::from_file("models/tokenizer.json").map_err(E::msg)?;
+    let model_path = "models/qwen2.5-1.5b-instruct-q4_k_m.gguf";
+    let mut file = std::fs::File::open(model_path)?;
+    let content = gguf_file::Content::read(&mut file)?;
+    let model = QwenWeights::from_gguf(content, &mut file, device)?;
+    api::start_api(Box::new(QwenModel(model)), tokenizer, device.clone(), vec![151643, 151645], "Qwen").await;
+    Ok(())
 }
 
-impl Model for QwenWeights {
-    fn forward(&mut self, tensor: &Tensor, pos: usize) -> candle_core::Result<Tensor> {
-        self.forward(tensor, pos)
-    }
+async fn run_serve_phi3(device: &Device) -> Result<()> {
+    println!("{}", "Loading Phi-3 for API server...".yellow());
+    let tokenizer = Tokenizer::from_file("models/phi3_tokenizer.json").map_err(E::msg)?;
+    let model_path = "models/phi3-mini-4k-instruct-q4.gguf";
+    let mut file = std::fs::File::open(model_path)?;
+    let content = gguf_file::Content::read(&mut file)?;
+    let model = Phi3Weights::from_gguf(false, content, &mut file, device)?;
+    api::start_api(Box::new(Phi3Model(model)), tokenizer, device.clone(), vec![32000, 32007], "Phi-3").await;
+    Ok(())
 }
 
-impl Model for Phi3Weights {
-    fn forward(&mut self, tensor: &Tensor, pos: usize) -> candle_core::Result<Tensor> {
-        self.forward(tensor, pos)
-    }
+async fn run_serve_mistral(device: &Device) -> Result<()> {
+    println!("{}", "Loading Mistral 7B v0.3 for API server...".yellow());
+    let tokenizer = Tokenizer::from_file("models/mistral_tokenizer.json").map_err(E::msg)?;
+    let model_path = "models/mistral-7b-v0.3.gguf";
+    let mut file = std::fs::File::open(model_path)?;
+    let content = gguf_file::Content::read(&mut file)?;
+    let model = MistralWeights::from_gguf(content, &mut file, device)?;
+    api::start_api(Box::new(MistralModel(model)), tokenizer, device.clone(), vec![2, 28723], "Mistral").await;
+    Ok(())
 }
 
-impl Model for MistralWeights {
-    fn forward(&mut self, tensor: &Tensor, pos: usize) -> candle_core::Result<Tensor> {
-        self.forward(tensor, pos)
-    }
-}
+// ── Shared chat loop (unchanged) ─────────────────────────────────────────────
 
-fn chat_loop<M: Model>(
-    device: &Device, 
-    tokenizer: Tokenizer, 
-    model: &mut M, 
+fn chat_loop<F>(
+    device: &Device,
+    tokenizer: Tokenizer,
+    mut forward: F,
     eos_tokens: Vec<u32>,
-    model_name: &str
-) -> Result<()> 
+    model_name: &str,
+) -> Result<()>
+where
+    F: FnMut(&Tensor, usize) -> candle_core::Result<Tensor>,
 {
     println!("{} Mode Active. Type 'exit' to quit.", model_name.green());
     let mut total_pos = 0;
@@ -137,29 +192,24 @@ fn chat_loop<M: Model>(
         if input.is_empty() { continue; }
 
         let formatted_input = match model_name {
-            "Phi-3" => format!("<|user|>\n{}<|end|>\n<|assistant|>", input),
+            "Phi-3"   => format!("<|user|>\n{}<|end|>\n<|assistant|>", input),
             "Mistral" => format!("<s>[INST] {} [/INST]", input),
-            _ => format!("<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", input),
+            _         => format!("<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", input),
         };
 
         let tokens = tokenizer.encode(formatted_input, true).map_err(E::msg)?;
         let prompt_tokens = tokens.get_ids();
-        
+
         print!("\n{}: ", model_name.purple().bold());
-        
+
         let mut tokens_to_process = prompt_tokens.to_vec();
         let mut decoder = TokenOutputStream::new(tokenizer.clone());
 
         for _ in 0..500 {
             let input_tensor = Tensor::new(tokens_to_process.as_slice(), device)?.unsqueeze(0)?;
-            
-            // KV CACHE LOGIC: 
-            // The model weights update their internal cache based on total_pos.
-            let logits = model.forward(&input_tensor, total_pos)?;
-            
-            // Advance the position by the number of tokens we just processed
+            let logits = forward(&input_tensor, total_pos)?;
             total_pos += tokens_to_process.len();
-            
+
             let next_token = get_next_token(&logits)?;
             if eos_tokens.contains(&next_token) { break; }
 
@@ -167,9 +217,6 @@ fn chat_loop<M: Model>(
                 print!("{}", t);
                 io::stdout().flush()?;
             }
-
-            // KV CACHE LOGIC: 
-            // After the first prompt pass, we only feed the single NEXT token back in.
             tokens_to_process = vec![next_token];
         }
         println!();
@@ -203,11 +250,9 @@ impl TokenOutputStream {
         self.tokens.push(token);
         let full_text = self.tokenizer.decode(&self.tokens, true).map_err(E::msg)?;
         let readable_text = &full_text[self.prev_index..];
-        
         if readable_text.is_empty() {
             return Ok(None);
         }
-
         self.prev_index = full_text.len();
         Ok(Some(readable_text.to_string()))
     }
