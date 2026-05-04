@@ -147,7 +147,7 @@ where F: FnMut(&Tensor, usize) -> candle_core::Result<Tensor>
 }
 
 
-// token generator
+// token generator 
 fn get_next_token(logits: &Tensor) -> Result<u32> {
     let shape = logits.dims();
     let last_row = match shape.len() {
