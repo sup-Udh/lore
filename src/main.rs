@@ -1,4 +1,5 @@
 mod api;
+mod agents;
 
 use anyhow::{Error as E, Result};
 use candle_core::{Device, Tensor};
@@ -64,7 +65,6 @@ enum ModelChoice {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // OPT 1: saturate all CPU cores for matrix ops before anything else loads
     let num_cpus = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
@@ -104,7 +104,9 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-// ── Chat runners ─────────────────────────────────────────────────────────────
+// ── Chat runners ──────────────────────────────────────────────────────────────
+// Each runner loads the model into its wrapper and passes &mut dyn Model
+// to chat_loop so the orchestrator can borrow it without owning it.
 
 fn run_chat_qwen(device: &Device) -> Result<()> {
     println!("{}", "Loading Qwen 2.5...".yellow());
@@ -112,8 +114,8 @@ fn run_chat_qwen(device: &Device) -> Result<()> {
     let model_path = "models/qwen2.5-1.5b-instruct-q4_k_m.gguf";
     let mut file = std::fs::File::open(model_path)?;
     let content = gguf_file::Content::read(&mut file)?;
-    let mut model = QwenWeights::from_gguf(content, &mut file, &device)?;
-    chat_loop(device, tokenizer, |t, p| model.forward(t, p), vec![151643, 151645], "Qwen")
+    let mut model = QwenModel(QwenWeights::from_gguf(content, &mut file, device)?);
+    chat_loop(device, tokenizer, &mut model, vec![151643, 151645], "Qwen")
 }
 
 fn run_chat_phi3(device: &Device) -> Result<()> {
@@ -122,8 +124,8 @@ fn run_chat_phi3(device: &Device) -> Result<()> {
     let model_path = "models/phi3-mini-4k-instruct-q4.gguf";
     let mut file = std::fs::File::open(model_path)?;
     let content = gguf_file::Content::read(&mut file)?;
-    let mut model = Phi3Weights::from_gguf(false, content, &mut file, &device)?;
-    chat_loop(device, tokenizer, |t, p| model.forward(t, p), vec![32000, 32007], "Phi-3")
+    let mut model = Phi3Model(Phi3Weights::from_gguf(false, content, &mut file, device)?);
+    chat_loop(device, tokenizer, &mut model, vec![32000, 32007], "Phi-3")
 }
 
 fn run_chat_mistral(device: &Device) -> Result<()> {
@@ -132,8 +134,8 @@ fn run_chat_mistral(device: &Device) -> Result<()> {
     let model_path = "models/mistral-7b-v0.3.gguf";
     let mut file = std::fs::File::open(model_path)?;
     let content = gguf_file::Content::read(&mut file)?;
-    let mut model = MistralWeights::from_gguf(content, &mut file, &device)?;
-    chat_loop(device, tokenizer, |t, p| model.forward(t, p), vec![2, 28723], "Mistral")
+    let mut model = MistralModel(MistralWeights::from_gguf(content, &mut file, device)?);
+    chat_loop(device, tokenizer, &mut model, vec![2, 28723], "Mistral")
 }
 
 // ── Serve runners ─────────────────────────────────────────────────────────────
@@ -173,17 +175,24 @@ async fn run_serve_mistral(device: &Device) -> Result<()> {
 
 // ── Chat loop ─────────────────────────────────────────────────────────────────
 
-fn chat_loop<F>(
+fn chat_loop(
     device: &Device,
     tokenizer: Tokenizer,
-    mut forward: F,
+    model: &mut dyn Model,
     eos_tokens: Vec<u32>,
     model_name: &str,
-) -> Result<()>
-where
-    F: FnMut(&Tensor, usize) -> candle_core::Result<Tensor>,
-{
+) -> Result<()> {
+    use agents::{InferenceContext, orchestrator::Orchestrator};
+
     println!("{} Mode Active. Type 'exit' to quit.", model_name.green());
+
+    let ctx = InferenceContext {
+        tokenizer: &tokenizer,
+        device,
+        eos_tokens: &eos_tokens,
+        model_name,
+    };
+    let mut orchestrator = Orchestrator::new();
 
     loop {
         print!("\n{} > ", "You".blue().bold());
@@ -196,57 +205,13 @@ where
         if input == "exit" { break; }
         if input.is_empty() { continue; }
 
-        let formatted_input = match model_name {
-            "Phi-3"   => format!("<|user|>\n{}<|end|>\n<|assistant|>", input),
-            "Mistral" => format!("<s>[INST] {} [/INST]", input),
-            _         => format!("<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", input),
-        };
-
-        let tokens = tokenizer.encode(formatted_input, true).map_err(E::msg)?;
-        let prompt_ids = tokens.get_ids();
-
-        print!("\n{}: ", model_name.purple().bold());
-
-        // OPT 2: reset total_pos per turn — each question is independent.
-        // Keeping it accumulate across turns fed the new prompt at the wrong
-        // KV-cache offset, so the model was attending to garbage positions.
-        let mut total_pos: usize = 0;
-
-        // OPT 3: first pass feeds full prompt; after that feed one token at a time
-        // using std::slice::from_ref to avoid a Vec heap allocation each step.
-        let mut last_token: u32 = 0;
-        let mut decoder = TokenOutputStream::new(tokenizer.clone());
-
-        for step in 0..500usize {
-            let ids: &[u32] = if step == 0 { prompt_ids } else { std::slice::from_ref(&last_token) };
-            let input_tensor = Tensor::new(ids, device)?.unsqueeze(0)?;
-            let logits = forward(&input_tensor, total_pos)?;
-            total_pos += ids.len();
-
-            let next_token = get_next_token(&logits)?;
-            if eos_tokens.contains(&next_token) { break; }
-
-            last_token = next_token;
-
-            if let Some(t) = decoder.next_token(next_token)? {
-                print!("{}", t);
-                io::stdout().flush()?;
-            }
-        }
-        println!();
+        let response = orchestrator.run(model, &ctx, input.to_string())?;
+        println!("\n{}: {}", model_name.purple().bold(), response);
     }
     Ok(())
 }
 
-fn get_next_token(logits: &Tensor) -> Result<u32> {
-    let shape = logits.dims();
-    let last_row = match shape.len() {
-        3 => logits.get(0)?.get(shape[1] - 1)?,
-        2 => logits.get(shape[0] - 1)?,
-        _ => logits.clone(),
-    };
-    Ok(last_row.argmax(0)?.to_scalar::<u32>()?)
-}
+// ── Token streaming ───────────────────────────────────────────────────────────
 
 pub struct TokenOutputStream {
     tokenizer: Tokenizer,

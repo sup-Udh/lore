@@ -2,10 +2,10 @@ use axum::{routing::post, Json, Router, extract::State};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use candle_core::{Device, Tensor};
+use candle_core::Device;
 use tokenizers::Tokenizer;
-use anyhow::Result;
-use crate::{Model, TokenOutputStream};
+use crate::Model;
+use crate::agents::{InferenceContext, orchestrator::Orchestrator};
 
 #[derive(Deserialize)]
 pub struct ChatRequest {
@@ -31,57 +31,20 @@ async fn chat_handler(
 ) -> Json<ChatResponse> {
     println!("API Hit ({}): {}", state.model_name, payload.prompt);
 
-    let formatted = match state.model_name.as_str() {
-        "Phi-3"   => format!("<|user|>\n{}<|end|>\n<|assistant|>", payload.prompt),
-        "Mistral" => format!("<s>[INST] {} [/INST]", payload.prompt),
-        _         => format!("<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", payload.prompt),
-    };
-
-    let tokens = state.tokenizer.encode(formatted, true).unwrap();
-    let prompt_ids = tokens.get_ids().to_vec();
-
     let mut model = state.model.lock().await;
 
-    // OPT 2: total_pos reset per request — each API call is stateless
-    let mut total_pos: usize = 0;
-    let mut last_token: u32 = 0;
-
-    // OPT 3: incremental decode via TokenOutputStream — no bulk Vec<u32> + decode at end
-    let mut decoder = TokenOutputStream::new(state.tokenizer.clone());
-
-    for step in 0..500usize {
-        // OPT 4: first pass feeds full prompt; after that feed one token using
-        // from_ref to avoid a heap Vec alloc on every step
-        let ids: &[u32] = if step == 0 { &prompt_ids } else { std::slice::from_ref(&last_token) };
-
-        let input_tensor = Tensor::new(ids, &state.device)
-            .unwrap()
-            .unsqueeze(0)
-            .unwrap();
-
-        let logits = model.forward(&input_tensor, total_pos).unwrap();
-        total_pos += ids.len();
-
-        let next_token = get_next_token(&logits).unwrap();
-        if state.eos_tokens.contains(&next_token) { break; }
-
-        last_token = next_token;
-        decoder.next_token(next_token).unwrap();
-    }
-
-    let response_text = decoder.into_text().unwrap_or_default();
-
-    Json(ChatResponse { response: response_text })
-}
-
-fn get_next_token(logits: &Tensor) -> Result<u32> {
-    let shape = logits.dims();
-    let last_row = match shape.len() {
-        3 => logits.get(0)?.get(shape[1] - 1)?,
-        2 => logits.get(shape[0] - 1)?,
-        _ => logits.clone(),
+    let ctx = InferenceContext {
+        tokenizer: &state.tokenizer,
+        device: &state.device,
+        eos_tokens: &state.eos_tokens,
+        model_name: &state.model_name,
     };
-    Ok(last_row.argmax(0)?.to_scalar::<u32>()?)
+
+    let mut orchestrator = Orchestrator::new();
+    // &mut **model: deref MutexGuard → Box<dyn Model> → dyn Model, then reborrow as &mut
+    let response = orchestrator.run(&mut **model, &ctx, payload.prompt).unwrap_or_default();
+
+    Json(ChatResponse { response })
 }
 
 pub async fn start_api(
