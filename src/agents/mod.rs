@@ -5,7 +5,25 @@ pub mod compare;
 use candle_core::{Device, Tensor};
 use tokenizers::Tokenizer;
 use anyhow::{Error as E, Result};
+use serde::Serialize;
 use crate::{Model, TokenOutputStream};
+
+// ── Trace structs ─────────────────────────────────────────────────────────────
+
+#[derive(Serialize, Debug, Clone)]
+pub struct AgentStep {
+    pub agent: String,
+    pub input: String,
+    pub output: String,
+}
+
+#[derive(Serialize, Debug)]
+pub struct Trace {
+    pub steps: Vec<AgentStep>,
+    pub final_output: String,
+}
+
+// ── Shared inference context ──────────────────────────────────────────────────
 
 pub struct InferenceContext<'a> {
     pub tokenizer: &'a Tokenizer,
@@ -14,9 +32,8 @@ pub struct InferenceContext<'a> {
     pub model_name: &'a str,
 }
 
-// Core inference engine shared by all agents.
-// Each call is independent: total_pos resets to 0 so the KV cache
-// is always written from position 0 for the new prompt.
+// ── Core inference engine used by all agents ──────────────────────────────────
+
 pub fn generate(
     model: &mut dyn Model,
     ctx: &InferenceContext,
