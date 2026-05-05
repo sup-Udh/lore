@@ -11,8 +11,6 @@ use std::io::{self, Write};
 use clap::{Parser, Subcommand, ValueEnum};
 use colored::*;
 
-
-//  major traits models (common end point)
 pub trait Model {
     fn forward(&mut self, input: &Tensor, pos: usize) -> candle_core::Result<Tensor>;
 }
@@ -38,8 +36,6 @@ impl Model for MistralModel {
     }
 }
 
-
-// cli implemenation
 #[derive(Parser)]
 #[command(name = "lore", about = "Local LLM CLI", version = "0.1.0")]
 struct Cli {
@@ -67,9 +63,13 @@ enum ModelChoice {
 }
 
 #[tokio::main]
-
-// main async function to call out different commands and run required models
 async fn main() -> Result<()> {
+    // OPT 1: saturate all CPU cores for matrix ops before anything else loads
+    let num_cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    std::env::set_var("RAYON_NUM_THREADS", num_cpus.to_string());
+
     let cli = Cli::parse();
     let device = Device::Cpu;
 
@@ -82,6 +82,7 @@ async fn main() -> Result<()> {
     ╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝
     "# .cyan().bold());
     println!("{}", "--- Local Intelligence Engine Initialized ---".black().on_white());
+    println!("Threads: {}", num_cpus);
 
     match cli.command {
         Commands::Chat { model } => {
@@ -103,7 +104,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-// ── Chat runners  ─────────────────────────────────────────────────
+// ── Chat runners ─────────────────────────────────────────────────────────────
 
 fn run_chat_qwen(device: &Device) -> Result<()> {
     println!("{}", "Loading Qwen 2.5...".yellow());
@@ -135,7 +136,7 @@ fn run_chat_mistral(device: &Device) -> Result<()> {
     chat_loop(device, tokenizer, |t, p| model.forward(t, p), vec![2, 28723], "Mistral")
 }
 
-// ── Serve runners  ──────────────────────────────────────────────────────
+// ── Serve runners ─────────────────────────────────────────────────────────────
 
 async fn run_serve_qwen(device: &Device) -> Result<()> {
     println!("{}", "Loading Qwen 2.5 for API server...".yellow());
@@ -170,8 +171,8 @@ async fn run_serve_mistral(device: &Device) -> Result<()> {
     Ok(())
 }
 
-// ── Shared chat loop  ─────────────────────────────────────────────
-// temp ram and memeory usage
+// ── Chat loop ─────────────────────────────────────────────────────────────────
+
 fn chat_loop<F>(
     device: &Device,
     tokenizer: Tokenizer,
@@ -183,7 +184,6 @@ where
     F: FnMut(&Tensor, usize) -> candle_core::Result<Tensor>,
 {
     println!("{} Mode Active. Type 'exit' to quit.", model_name.green());
-    let mut total_pos = 0;
 
     loop {
         print!("\n{} > ", "You".blue().bold());
@@ -203,26 +203,35 @@ where
         };
 
         let tokens = tokenizer.encode(formatted_input, true).map_err(E::msg)?;
-        let prompt_tokens = tokens.get_ids();
+        let prompt_ids = tokens.get_ids();
 
         print!("\n{}: ", model_name.purple().bold());
 
-        let mut tokens_to_process = prompt_tokens.to_vec();
+        // OPT 2: reset total_pos per turn — each question is independent.
+        // Keeping it accumulate across turns fed the new prompt at the wrong
+        // KV-cache offset, so the model was attending to garbage positions.
+        let mut total_pos: usize = 0;
+
+        // OPT 3: first pass feeds full prompt; after that feed one token at a time
+        // using std::slice::from_ref to avoid a Vec heap allocation each step.
+        let mut last_token: u32 = 0;
         let mut decoder = TokenOutputStream::new(tokenizer.clone());
 
-        for _ in 0..500 {
-            let input_tensor = Tensor::new(tokens_to_process.as_slice(), device)?.unsqueeze(0)?;
+        for step in 0..500usize {
+            let ids: &[u32] = if step == 0 { prompt_ids } else { std::slice::from_ref(&last_token) };
+            let input_tensor = Tensor::new(ids, device)?.unsqueeze(0)?;
             let logits = forward(&input_tensor, total_pos)?;
-            total_pos += tokens_to_process.len();
+            total_pos += ids.len();
 
             let next_token = get_next_token(&logits)?;
             if eos_tokens.contains(&next_token) { break; }
+
+            last_token = next_token;
 
             if let Some(t) = decoder.next_token(next_token)? {
                 print!("{}", t);
                 io::stdout().flush()?;
             }
-            tokens_to_process = vec![next_token];
         }
         println!();
     }
@@ -236,29 +245,30 @@ fn get_next_token(logits: &Tensor) -> Result<u32> {
         2 => logits.get(shape[0] - 1)?,
         _ => logits.clone(),
     };
-    let next_id = last_row.argmax(0)?.to_scalar::<u32>()?;
-    Ok(next_id)
+    Ok(last_row.argmax(0)?.to_scalar::<u32>()?)
 }
 
-struct TokenOutputStream {
+pub struct TokenOutputStream {
     tokenizer: Tokenizer,
     tokens: Vec<u32>,
     prev_index: usize,
 }
 
 impl TokenOutputStream {
-    fn new(tokenizer: Tokenizer) -> Self {
+    pub fn new(tokenizer: Tokenizer) -> Self {
         Self { tokenizer, tokens: Vec::new(), prev_index: 0 }
     }
 
-    fn next_token(&mut self, token: u32) -> Result<Option<String>> {
+    pub fn next_token(&mut self, token: u32) -> Result<Option<String>> {
         self.tokens.push(token);
         let full_text = self.tokenizer.decode(&self.tokens, true).map_err(E::msg)?;
-        let readable_text = &full_text[self.prev_index..];
-        if readable_text.is_empty() {
-            return Ok(None);
-        }
+        let new_text = &full_text[self.prev_index..];
+        if new_text.is_empty() { return Ok(None); }
         self.prev_index = full_text.len();
-        Ok(Some(readable_text.to_string()))
+        Ok(Some(new_text.to_string()))
+    }
+
+    pub fn into_text(self) -> Result<String> {
+        self.tokenizer.decode(&self.tokens, true).map_err(E::msg)
     }
 }

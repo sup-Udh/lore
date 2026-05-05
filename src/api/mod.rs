@@ -4,11 +4,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use candle_core::{Device, Tensor};
 use tokenizers::Tokenizer;
-use anyhow::{Result};
-use crate::Model;
+use anyhow::Result;
+use crate::{Model, TokenOutputStream};
 
-
-// getting prompt service here
 #[derive(Deserialize)]
 pub struct ChatRequest {
     pub prompt: String,
@@ -17,12 +15,10 @@ pub struct ChatRequest {
 #[derive(Serialize)]
 pub struct ChatResponse {
     pub response: String,
-
 }
 
-// main api state
 pub struct AppState {
-    pub model: Mutex<Box<dyn Model + Send>>, // this can help the app to take multiple requestsss
+    pub model: Mutex<Box<dyn Model + Send>>,
     pub tokenizer: Tokenizer,
     pub device: Device,
     pub eos_tokens: Vec<u32>,
@@ -31,49 +27,52 @@ pub struct AppState {
 
 async fn chat_handler(
     State(state): State<Arc<AppState>>,
-    Json(payload): Json<ChatRequest>, // used for extracting the json prompt given by the user
+    Json(payload): Json<ChatRequest>,
 ) -> Json<ChatResponse> {
-    // debug
     println!("API Hit ({}): {}", state.model_name, payload.prompt);
 
     let formatted = match state.model_name.as_str() {
         "Phi-3"   => format!("<|user|>\n{}<|end|>\n<|assistant|>", payload.prompt),
         "Mistral" => format!("<s>[INST] {} [/INST]", payload.prompt),
-        _         => format!("<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", payload.prompt), // default qwen load
+        _         => format!("<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", payload.prompt),
     };
 
     let tokens = state.tokenizer.encode(formatted, true).unwrap();
-    let prompt_tokens = tokens.get_ids().to_vec();
+    let prompt_ids = tokens.get_ids().to_vec();
 
     let mut model = state.model.lock().await;
-    let mut tokens_to_process = prompt_tokens.clone();
-    let mut generated: Vec<u32> = Vec::new();
-    let mut total_pos = 0;
 
-    for _ in 0..500 {
-        let input_tensor = Tensor::new(tokens_to_process.as_slice(), &state.device)
+    // OPT 2: total_pos reset per request — each API call is stateless
+    let mut total_pos: usize = 0;
+    let mut last_token: u32 = 0;
+
+    // OPT 3: incremental decode via TokenOutputStream — no bulk Vec<u32> + decode at end
+    let mut decoder = TokenOutputStream::new(state.tokenizer.clone());
+
+    for step in 0..500usize {
+        // OPT 4: first pass feeds full prompt; after that feed one token using
+        // from_ref to avoid a heap Vec alloc on every step
+        let ids: &[u32] = if step == 0 { &prompt_ids } else { std::slice::from_ref(&last_token) };
+
+        let input_tensor = Tensor::new(ids, &state.device)
             .unwrap()
             .unsqueeze(0)
             .unwrap();
 
         let logits = model.forward(&input_tensor, total_pos).unwrap();
-        total_pos += tokens_to_process.len();
+        total_pos += ids.len();
 
         let next_token = get_next_token(&logits).unwrap();
-
         if state.eos_tokens.contains(&next_token) { break; }
 
-        generated.push(next_token);
-        tokens_to_process = vec![next_token];
+        last_token = next_token;
+        decoder.next_token(next_token).unwrap();
     }
 
-    let response_text = state.tokenizer.decode(&generated, true).unwrap_or_default();
+    let response_text = decoder.into_text().unwrap_or_default();
 
     Json(ChatResponse { response: response_text })
 }
-
-
-// token logic
 
 fn get_next_token(logits: &Tensor) -> Result<u32> {
     let shape = logits.dims();
@@ -84,8 +83,6 @@ fn get_next_token(logits: &Tensor) -> Result<u32> {
     };
     Ok(last_row.argmax(0)?.to_scalar::<u32>()?)
 }
-
-// server running 
 
 pub async fn start_api(
     model: Box<dyn Model + Send>,
