@@ -51,7 +51,7 @@ pub fn generate(
 
     let mut total_pos: usize = 0;
     let mut last_token: u32 = 0;
-    let mut decoder = TokenOutputStream::new(ctx.tokenizer.clone());
+    let mut generated: Vec<u32> = Vec::with_capacity(500);  // collect, don't decode per step
 
     for step in 0..500usize {
         let ids: &[u32] = if step == 0 { &prompt_ids } else { std::slice::from_ref(&last_token) };
@@ -63,11 +63,12 @@ pub fn generate(
         if ctx.eos_tokens.contains(&next_token) { break; }
 
         last_token = next_token;
-        decoder.next_token(next_token)?;
+        generated.push(next_token);  // just push, decode once at end
     }
 
-    decoder.into_text()
+    ctx.tokenizer.decode(&generated, true).map_err(E::msg)  // single decode
 }
+
 
 fn get_next_token(logits: &Tensor) -> Result<u32> {
     let shape = logits.dims();
