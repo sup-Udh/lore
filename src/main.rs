@@ -205,8 +205,15 @@ fn chat_loop(
         if input == "exit" { break; }
         if input.is_empty() { continue; }
 
-        let response = orchestrator.run(model, &ctx, input.to_string())?;
-        println!("\n{}: {}", model_name.purple().bold(), response);
+        let trace = orchestrator.run(model, &ctx, input.to_string())?;
+
+        // Print step-by-step trace in CLI
+        for (i, step) in trace.steps.iter().enumerate() {
+            println!("\n{}", format!("[Step {}] {}", i + 1, step.agent).yellow().bold());
+            println!("{}", step.output.trim().dimmed());
+        }
+
+        println!("\n{}: {}", model_name.purple().bold(), trace.final_output);
     }
     Ok(())
 }

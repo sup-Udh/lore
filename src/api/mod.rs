@@ -5,16 +5,18 @@ use tokio::sync::Mutex;
 use candle_core::Device;
 use tokenizers::Tokenizer;
 use crate::Model;
-use crate::agents::{InferenceContext, orchestrator::Orchestrator};
+use crate::agents::{AgentStep, InferenceContext, orchestrator::Orchestrator};
 
 #[derive(Deserialize)]
 pub struct ChatRequest {
     pub prompt: String,
+    pub debug: Option<bool>, // if true, trace is included in response
 }
 
 #[derive(Serialize)]
 pub struct ChatResponse {
     pub response: String,
+    pub trace: Option<Vec<AgentStep>>, // None unless debug = true
 }
 
 pub struct AppState {
@@ -29,7 +31,8 @@ async fn chat_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ChatRequest>,
 ) -> Json<ChatResponse> {
-    println!("API Hit ({}): {}", state.model_name, payload.prompt);
+    let debug = payload.debug.unwrap_or(false);
+    println!("API Hit ({}) [debug={}]: {}", state.model_name, debug, payload.prompt);
 
     let mut model = state.model.lock().await;
 
@@ -41,10 +44,12 @@ async fn chat_handler(
     };
 
     let mut orchestrator = Orchestrator::new();
-    // &mut **model: deref MutexGuard → Box<dyn Model> → dyn Model, then reborrow as &mut
-    let response = orchestrator.run(&mut **model, &ctx, payload.prompt).unwrap_or_default();
+    let trace = orchestrator.run(&mut **model, &ctx, payload.prompt).unwrap();
 
-    Json(ChatResponse { response })
+    Json(ChatResponse {
+        response: trace.final_output,
+        trace: if debug { Some(trace.steps) } else { None },
+    })
 }
 
 pub async fn start_api(
