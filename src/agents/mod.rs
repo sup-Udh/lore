@@ -6,9 +6,7 @@ use candle_core::{Device, Tensor};
 use tokenizers::Tokenizer;
 use anyhow::{Error as E, Result};
 use serde::Serialize;
-use crate::{Model, TokenOutputStream};
-
-// ── Trace structs ─────────────────────────────────────────────────────────────
+use crate::Model;
 
 #[derive(Serialize, Debug, Clone)]
 pub struct AgentStep {
@@ -23,8 +21,6 @@ pub struct Trace {
     pub final_output: String,
 }
 
-// ── Shared inference context ──────────────────────────────────────────────────
-
 pub struct InferenceContext<'a> {
     pub tokenizer: &'a Tokenizer,
     pub device: &'a Device,
@@ -32,8 +28,9 @@ pub struct InferenceContext<'a> {
     pub model_name: &'a str,
 }
 
-// ── Core inference engine used by all agents ──────────────────────────────────
-
+// Used by agents (multi-agent path) AND Qwen direct path.
+// Fixed: was calling tokenizer.decode() on the full growing list every step (O(n²)).
+// Now collects tokens and decodes once at the end (O(n)).
 pub fn generate(
     model: &mut dyn Model,
     ctx: &InferenceContext,
@@ -51,7 +48,7 @@ pub fn generate(
 
     let mut total_pos: usize = 0;
     let mut last_token: u32 = 0;
-    let mut generated: Vec<u32> = Vec::with_capacity(500);  // collect, don't decode per step
+    let mut generated: Vec<u32> = Vec::with_capacity(500);
 
     for step in 0..500usize {
         let ids: &[u32] = if step == 0 { &prompt_ids } else { std::slice::from_ref(&last_token) };
@@ -63,19 +60,20 @@ pub fn generate(
         if ctx.eos_tokens.contains(&next_token) { break; }
 
         last_token = next_token;
-        generated.push(next_token);  // just push, decode once at end
+        generated.push(next_token);
     }
 
-    ctx.tokenizer.decode(&generated, true).map_err(E::msg)  // single decode
+    ctx.tokenizer.decode(&generated, true).map_err(E::msg)
 }
 
-
 fn get_next_token(logits: &Tensor) -> Result<u32> {
+    // OPTIMIZATION: Removed unnecessary cloning in hot path — unknown rank is
+    // an error, not a case to clone through.
     let shape = logits.dims();
     let last_row = match shape.len() {
         3 => logits.get(0)?.get(shape[1] - 1)?,
         2 => logits.get(shape[0] - 1)?,
-        _ => logits.clone(),
+        _ => anyhow::bail!("unexpected logits rank {}", shape.len()),
     };
     Ok(last_row.argmax(0)?.to_scalar::<u32>()?)
 }

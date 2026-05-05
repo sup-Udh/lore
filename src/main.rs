@@ -68,7 +68,10 @@ async fn main() -> Result<()> {
     let num_cpus = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
+    // OPTIMIZATION: Maximize CPU usage via Rayon thread pool
     std::env::set_var("RAYON_NUM_THREADS", num_cpus.to_string());
+    // Some BLAS/linear-algebra backends (used by candle matmul) respect OMP_NUM_THREADS
+    std::env::set_var("OMP_NUM_THREADS", num_cpus.to_string());
 
     let cli = Cli::parse();
     let device = Device::Cpu;
@@ -182,7 +185,7 @@ fn chat_loop(
     eos_tokens: Vec<u32>,
     model_name: &str,
 ) -> Result<()> {
-    use agents::{InferenceContext, orchestrator::Orchestrator};
+    use agents::{InferenceContext, generate, orchestrator::Orchestrator};
 
     println!("{} Mode Active. Type 'exit' to quit.", model_name.green());
 
@@ -192,6 +195,8 @@ fn chat_loop(
         eos_tokens: &eos_tokens,
         model_name,
     };
+
+    // Orchestrator is ZST-backed so creating it is free even if Qwen never uses it
     let mut orchestrator = Orchestrator::new();
 
     loop {
@@ -205,42 +210,21 @@ fn chat_loop(
         if input == "exit" { break; }
         if input.is_empty() { continue; }
 
-        let trace = orchestrator.run(model, &ctx, input.to_string())?;
-
-        // Print step-by-step trace in CLI
-        for (i, step) in trace.steps.iter().enumerate() {
-            println!("\n{}", format!("[Step {}] {}", i + 1, step.agent).yellow().bold());
-            println!("{}", step.output.trim().dimmed());
+        if model_name == "Qwen" {
+            // Direct single-pass inference — no agents, no overhead
+            let response = generate(model, &ctx, "You are a helpful assistant.", input)?;
+            println!("\n{}: {}", model_name.purple().bold(), response);
+        } else {
+            // Multi-agent pipeline for Phi-3 and Mistral
+            let trace = orchestrator.run(model, &ctx, input.to_string())?;
+            for (i, step) in trace.steps.iter().enumerate() {
+                println!("\n{}", format!("[Step {}] {}", i + 1, step.agent).yellow().bold());
+                println!("{}", step.output.trim().dimmed());
+            }
+            println!("\n{}: {}", model_name.purple().bold(), trace.final_output);
         }
-
-        println!("\n{}: {}", model_name.purple().bold(), trace.final_output);
     }
     Ok(())
 }
 
-// ── Token streaming ───────────────────────────────────────────────────────────
 
-pub struct TokenOutputStream {
-    tokenizer: Tokenizer,
-    tokens: Vec<u32>,
-    prev_index: usize,
-}
-
-impl TokenOutputStream {
-    pub fn new(tokenizer: Tokenizer) -> Self {
-        Self { tokenizer, tokens: Vec::new(), prev_index: 0 }
-    }
-
-    pub fn next_token(&mut self, token: u32) -> Result<Option<String>> {
-        self.tokens.push(token);
-        let full_text = self.tokenizer.decode(&self.tokens, true).map_err(E::msg)?;
-        let new_text = &full_text[self.prev_index..];
-        if new_text.is_empty() { return Ok(None); }
-        self.prev_index = full_text.len();
-        Ok(Some(new_text.to_string()))
-    }
-
-    pub fn into_text(self) -> Result<String> {
-        self.tokenizer.decode(&self.tokens, true).map_err(E::msg)
-    }
-}

@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 use candle_core::Device;
 use tokenizers::Tokenizer;
 use crate::Model;
-use crate::agents::{AgentStep, InferenceContext, orchestrator::Orchestrator};
+use crate::agents::{self, AgentStep, InferenceContext, orchestrator::Orchestrator};
 
 #[derive(Deserialize)]
 pub struct ChatRequest {
@@ -43,13 +43,26 @@ async fn chat_handler(
         model_name: &state.model_name,
     };
 
-    let mut orchestrator = Orchestrator::new();
-    let trace = orchestrator.run(&mut **model, &ctx, payload.prompt).unwrap();
+    if state.model_name == "Qwen" {
+        // Direct path: single inference pass, no agents
+        let response = agents::generate(
+            &mut **model,
+            &ctx,
+            "You are a helpful assistant.",
+            &payload.prompt,
+        ).unwrap_or_default();
 
-    Json(ChatResponse {
-        response: trace.final_output,
-        trace: if debug { Some(trace.steps) } else { None },
-    })
+        Json(ChatResponse { response, trace: None })
+    } else {
+        // Multi-agent path for Phi-3 and Mistral
+        let mut orchestrator = Orchestrator::new();
+        let trace = orchestrator.run(&mut **model, &ctx, payload.prompt).unwrap();
+
+        Json(ChatResponse {
+            response: trace.final_output,
+            trace: if debug { Some(trace.steps) } else { None },
+        })
+    }
 }
 
 pub async fn start_api(
