@@ -991,6 +991,7 @@ dependencies = [
  "candle-transformers",
  "clap",
  "colored",
+ "memmap2",
  "serde",
  "serde_json",
  "tokenizers",

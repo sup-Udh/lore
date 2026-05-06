@@ -115,9 +115,12 @@ fn run_chat_qwen(device: &Device) -> Result<()> {
     println!("{}", "Loading Qwen 2.5...".yellow());
     let tokenizer = Tokenizer::from_file("models/tokenizer.json").map_err(E::msg)?;
     let model_path = "models/qwen2.5-1.5b-instruct-q4_k_m.gguf";
-    let mut file = std::fs::File::open(model_path)?;
-    let content = gguf_file::Content::read(&mut file)?;
-    let mut model = QwenModel(QwenWeights::from_gguf(content, &mut file, device)?);
+    // OPTIMIZATION: Using memory-mapped GGUF loading to avoid full file copy and reduce RAM usage
+    let file = std::fs::File::open(model_path)?;
+    let mmap = unsafe { memmap2::Mmap::map(&file)? };
+    let mut cursor = std::io::Cursor::new(&mmap[..]);
+    let content = gguf_file::Content::read(&mut cursor)?;
+    let mut model = QwenModel(QwenWeights::from_gguf(content, &mut cursor, device)?);
     chat_loop(device, tokenizer, &mut model, vec![151643, 151645], "Qwen")
 }
 
@@ -147,9 +150,12 @@ async fn run_serve_qwen(device: &Device) -> Result<()> {
     println!("{}", "Loading Qwen 2.5 for API server...".yellow());
     let tokenizer = Tokenizer::from_file("models/tokenizer.json").map_err(E::msg)?;
     let model_path = "models/qwen2.5-1.5b-instruct-q4_k_m.gguf";
-    let mut file = std::fs::File::open(model_path)?;
-    let content = gguf_file::Content::read(&mut file)?;
-    let model = QwenWeights::from_gguf(content, &mut file, device)?;
+    // OPTIMIZATION: Using memory-mapped GGUF loading to avoid full file copy and reduce RAM usage
+    let file = std::fs::File::open(model_path)?;
+    let mmap = unsafe { memmap2::Mmap::map(&file)? };
+    let mut cursor = std::io::Cursor::new(&mmap[..]);
+    let content = gguf_file::Content::read(&mut cursor)?;
+    let model = QwenWeights::from_gguf(content, &mut cursor, device)?;
     api::start_api(Box::new(QwenModel(model)), tokenizer, device.clone(), vec![151643, 151645], "Qwen").await;
     Ok(())
 }
