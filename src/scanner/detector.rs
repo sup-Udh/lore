@@ -1,14 +1,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-// Detect programming language from file extension.
-//
-// Phase 1 is intentionally lightweight.
-// Later:
-// - AST parsing
-// - semantic analysis
-// - dependency graphs
-// can be added.
+
 pub fn detect_language(path: &Path) -> Option<String> {
 
     let ext = path

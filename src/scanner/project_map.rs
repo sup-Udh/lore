@@ -1,12 +1,6 @@
 use serde::{Serialize, Deserialize};
 
-// Represents one discovered file in the project.
-//
-// This will later become VERY important for:
-// - embeddings
-// - retrieval
-// - semantic search
-// - agent memory
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectFile {
     pub path: String,
@@ -14,10 +8,7 @@ pub struct ProjectFile {
     pub size: u64,
 }
 
-// Core project metadata structure.
-//
-// This becomes Lore's internal understanding
-// of the repository.
+// main functioning of how things to be kept
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectMap {
     pub root: String,

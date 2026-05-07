@@ -1,12 +1,8 @@
 use std::path::Path;
 
-// Directories we NEVER want to scan.
-//
-// These folders:
-// - waste tokens
-// - waste memory
-// - slow down indexing
-// - contain irrelevant/generated files
+
+// add other things later to be deleeted v1 currently
+
 const IGNORED_DIRS: &[&str] = &[
     "target",
     "node_modules",

@@ -7,14 +7,7 @@ use super::detector::{detect_frameworks, detect_language};
 use super::ignore::should_ignore;
 use super::project_map::{ProjectFile, ProjectMap};
 
-// Main recursive project scanner.
-//
-// Responsibilities:
-// - recursively walk filesystem
-// - ignore junk directories
-// - detect languages
-// - collect metadata
-// - build ProjectMap
+
 pub fn scan_project(root: &Path) -> Result<ProjectMap> {
     let mut files = Vec::new();
     let mut languages = HashSet::new();

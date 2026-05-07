@@ -3,14 +3,8 @@ use std::path::Path;
 
 use super::project_map::ProjectMap;
 
-// Creates Lore's persistent memory directory.
-//
-// This folder will later contain:
-// - embeddings
-// - vector indexes
-// - architecture summaries
-// - agent memories
-// - retrieval cache
+// Creating Lore's persistent memory directory.
+
 pub fn initialize_lore_directory(
     root: &Path,
     project_map: &ProjectMap,
