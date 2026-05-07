@@ -2,28 +2,26 @@ use axum::{routing::post, Json, Router, extract::State};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use candle_core::Device;
-use tokenizers::Tokenizer;
-use crate::Model;
-use crate::agents::{self, AgentStep, InferenceContext, orchestrator::Orchestrator};
+use crate::agents::AgentStep;
+use crate::backends::llama_cpp::LlamaBackend;
 
 #[derive(Deserialize)]
 pub struct ChatRequest {
     pub prompt: String,
-    pub debug: Option<bool>, // if true, trace is included in response
+    pub debug: Option<bool>,
 }
 
 #[derive(Serialize)]
 pub struct ChatResponse {
     pub response: String,
-    pub trace: Option<Vec<AgentStep>>, // None unless debug = true
+    pub trace: Option<Vec<AgentStep>>,
 }
 
+// All three models now go through llama.cpp behind a single Mutex.
+// model_name decides whether the request runs through the orchestrator
+// (Phi-3 / Mistral) or hits the model directly (Qwen).
 pub struct AppState {
-    pub model: Mutex<Box<dyn Model + Send>>,
-    pub tokenizer: Tokenizer,
-    pub device: Device,
-    pub eos_tokens: Vec<u32>,
+    pub backend: Mutex<LlamaBackend>,
     pub model_name: String,
 }
 
@@ -34,49 +32,28 @@ async fn chat_handler(
     let debug = payload.debug.unwrap_or(false);
     println!("API Hit ({}) [debug={}]: {}", state.model_name, debug, payload.prompt);
 
-    let mut model = state.model.lock().await;
-
-    let ctx = InferenceContext {
-        tokenizer: &state.tokenizer,
-        device: &state.device,
-        eos_tokens: &state.eos_tokens,
-        model_name: &state.model_name,
-    };
+    let mut backend = state.backend.lock().await;
 
     if state.model_name == "Qwen" {
-        // Direct path: single inference pass, no agents
-        let response = agents::generate(
-            &mut **model,
-            &ctx,
-            "You are a helpful assistant.",
-            &payload.prompt,
-        ).unwrap_or_default();
-
+        // Qwen — direct, no agents
+        let response = backend.generate(&payload.prompt).unwrap_or_default();
         Json(ChatResponse { response, trace: None })
     } else {
-        // Multi-agent path for Phi-3 and Mistral
-        let mut orchestrator = Orchestrator::new();
-        let trace = orchestrator.run(&mut **model, &ctx, payload.prompt).unwrap();
-
-        Json(ChatResponse {
-            response: trace.final_output,
-            trace: if debug { Some(trace.steps) } else { None },
-        })
+        // MULTI-AGENT PIPELINE TEMPORARILY DISABLED
+        // DIRECT INFERENCE MODE ENABLED
+        // ORCHESTRATOR BYPASSED FOR PERFORMANCE
+        //
+        // Phi-3 / Mistral now use direct llama.cpp inference, same as Qwen.
+        // The `trace` field is retained for future re-enable support.
+        let response = backend.generate(&payload.prompt).unwrap_or_default();
+        let _ = debug; // retained for API compatibility while trace is bypassed
+        Json(ChatResponse { response, trace: None })
     }
 }
 
-pub async fn start_api(
-    model: Box<dyn Model + Send>,
-    tokenizer: Tokenizer,
-    device: Device,
-    eos_tokens: Vec<u32>,
-    model_name: &str,
-) {
+pub async fn start_api_llama(backend: LlamaBackend, model_name: &str) {
     let shared_state = Arc::new(AppState {
-        model: Mutex::new(model),
-        tokenizer,
-        device,
-        eos_tokens,
+        backend: Mutex::new(backend),
         model_name: model_name.to_string(),
     });
 
@@ -86,6 +63,5 @@ pub async fn start_api(
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     println!("Lore API online: http://localhost:3000/chat");
-
     axum::serve(listener, app).await.unwrap();
 }

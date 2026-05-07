@@ -16,11 +16,11 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 memmap2 = "0.9"
-llama-rs = "0.15"
+num_cpus = "1.17.0"
+# QWEN LLAMA.CPP MIGRATION — Qwen runs through llama-cpp bindings,
+# Phi-3 and Mistral continue to use Candle.
+llama-cpp-2 = "0.1.146"
 
-# OPTIMIZATION: Maximize CPU usage via Rayon thread pool — LTO inlines across
-# crate boundaries (hits the candle matmul hot path), codegen-units=1 lets
-# the compiler see the whole program at once, panic=abort removes unwind tables.
 [profile.release]
 opt-level = 3
 lto = "fat"

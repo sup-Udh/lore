@@ -1,17 +1,16 @@
 use anyhow::Result;
-use crate::Model;
-use super::{InferenceContext, generate};
+use crate::backends::llama_cpp::LlamaBackend;
 
 pub struct ResearchAgent;
 
 impl ResearchAgent {
     pub fn new() -> Self { Self }
 
-    pub fn run(&mut self, model: &mut dyn Model, ctx: &InferenceContext, input: String) -> Result<String> {
+    pub fn run(&mut self, backend: &mut LlamaBackend, input: &str) -> Result<String> {
         let system = "You are a research assistant. \
             Read the user input carefully, extract all key concepts, \
             expand on relevant details, and produce a thorough factual analysis. \
             Be precise and comprehensive.";
-        generate(model, ctx, system, &input)
+        backend.generate_with_system(system, input)
     }
 }

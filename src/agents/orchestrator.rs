@@ -1,7 +1,7 @@
 use anyhow::Result;
 use colored::*;
-use crate::Model;
-use super::{AgentStep, InferenceContext, Trace, research::ResearchAgent, compare::CompareAgent};
+use super::{AgentStep, Trace, research::ResearchAgent, compare::CompareAgent};
+use crate::backends::llama_cpp::LlamaBackend;
 
 pub struct Orchestrator {
     research: ResearchAgent,
@@ -16,13 +16,11 @@ impl Orchestrator {
         }
     }
 
-    pub fn run(&mut self, model: &mut dyn Model, ctx: &InferenceContext, input: String) -> Result<Trace> {
+    pub fn run(&mut self, backend: &mut LlamaBackend, input: String) -> Result<Trace> {
         let mut trace = Trace { steps: Vec::new(), final_output: String::new() };
 
         println!("{}", "[Research Agent] thinking...".dimmed());
-        let research_out = self.research.run(model, ctx, input.clone())?;
-        // OPTIMIZATION: Removed unnecessary cloning in hot path — move `input`
-        // into the step instead of cloning it a second time.
+        let research_out = self.research.run(backend, &input)?;
         trace.steps.push(AgentStep {
             agent: "ResearchAgent".to_string(),
             input,
@@ -30,11 +28,10 @@ impl Orchestrator {
         });
 
         println!("{}", "[Compare Agent] refining...".dimmed());
-        // research_out moved here — no extra clone needed for agent input
-        let final_out = self.compare.run(model, ctx, research_out)?;
+        let final_out = self.compare.run(backend, &research_out)?;
         trace.steps.push(AgentStep {
             agent: "CompareAgent".to_string(),
-            input: trace.steps[0].output.clone(),
+            input: research_out,
             output: final_out.clone(),
         });
 
