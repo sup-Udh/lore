@@ -2,7 +2,6 @@ use axum::{routing::post, Json, Router, extract::State};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use crate::agents::AgentStep;
 use crate::backends::llama_cpp::LlamaBackend;
 
 #[derive(Deserialize)]
@@ -14,7 +13,6 @@ pub struct ChatRequest {
 #[derive(Serialize)]
 pub struct ChatResponse {
     pub response: String,
-    pub trace: Option<Vec<AgentStep>>,
 }
 
 // All three models now go through llama.cpp behind a single Mutex.
@@ -37,7 +35,7 @@ async fn chat_handler(
     if state.model_name == "Qwen" {
         // Qwen — direct, no agents
         let response = backend.generate(&payload.prompt).unwrap_or_default();
-        Json(ChatResponse { response, trace: None })
+        Json(ChatResponse { response })
     } else {
         // MULTI-AGENT PIPELINE TEMPORARILY DISABLED
         // DIRECT INFERENCE MODE ENABLED
@@ -47,7 +45,7 @@ async fn chat_handler(
         // The `trace` field is retained for future re-enable support.
         let response = backend.generate(&payload.prompt).unwrap_or_default();
         let _ = debug; // retained for API compatibility while trace is bypassed
-        Json(ChatResponse { response, trace: None })
+        Json(ChatResponse { response})
     }
 }
 

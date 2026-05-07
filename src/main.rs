@@ -1,5 +1,4 @@
 mod api;
-mod agents;
 mod backends;
 
 use anyhow::Result;
