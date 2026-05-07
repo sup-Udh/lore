@@ -1,7 +1,13 @@
 use std::path::Path;
- 
-// can be updated later on
- const IGNORED_DIRS: &[&str] = &[
+
+// Directories we NEVER want to scan.
+//
+// These folders:
+// - waste tokens
+// - waste memory
+// - slow down indexing
+// - contain irrelevant/generated files
+const IGNORED_DIRS: &[&str] = &[
     "target",
     "node_modules",
     ".git",
@@ -11,7 +17,6 @@ use std::path::Path;
     "coverage",
     "vendor",
 ];
-
 
 // Checks whether a path should be ignored.
 pub fn should_ignore(path: &Path) -> bool {

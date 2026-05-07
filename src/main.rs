@@ -1,5 +1,6 @@
 mod api;
 mod backends;
+mod scanner;
 
 use anyhow::Result;
 use std::io::{self, Write};
@@ -24,6 +25,9 @@ enum Commands {
     Serve {
         #[arg(short, long, value_enum, default_value = "qwen")]
         model: ModelChoice,
+    },
+    Open {
+        path: String,
     },
 }
 
@@ -72,6 +76,36 @@ async fn main() -> Result<()> {
             ModelChoice::Mistral => run_serve(ModelKind::Mistral, "models/mistral-7b-v0.3.gguf",                "Mistral").await?,
             ModelChoice::DeepSeek => run_serve(ModelKind::DeepSeek, "models/deepseek-r1-distill-qwen-32b.gguf", "DeepSeek").await?,
         },
+
+        Commands::Open { path } => {
+            use std::path::Path;
+
+            use scanner::filesystem::scan_project;
+            use scanner::lore_dir::initialize_lore_directory;
+
+            println!("\n[LORE] Opening project...\n");
+
+            let root = Path::new(&path);
+
+            let project_map = scan_project(root)?;
+
+            // Create .lore/ and persist metadata.
+            initialize_lore_directory(root, &project_map)?;
+
+            // Print summary.
+            println!("[LORE] Project scan complete!\n");
+
+            println!("Root: {}", project_map.root);
+            println!("Languages: {:?}", project_map.languages);
+            println!("Frameworks: {:?}", project_map.frameworks);
+            println!("Files scanned: {}", project_map.files.len());
+
+            println!("\n[LORE] Project memory initialized in .lore/");
+
+
+            
+
+        }
     }
 
     Ok(())

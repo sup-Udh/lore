@@ -1,4 +1,9 @@
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
+use anyhow::Result;
+
+use super::detector::{detect_frameworks, detect_language};
 use super::ignore::should_ignore;
 use super::project_map::{ProjectFile, ProjectMap};
 
@@ -32,6 +37,7 @@ fn walk_directory(
     files: &mut Vec<ProjectFile>,
     languages: &mut HashSet<String>,
 ) -> Result<()> {
+
     // Ignore unwanted folders.
     if should_ignore(dir) {
         return Ok(());
@@ -41,13 +47,16 @@ fn walk_directory(
         let entry = entry?;
         let path: PathBuf = entry.path();
 
+        // Skip ignored paths.
         if should_ignore(&path) {
             continue;
         }
 
         if path.is_dir() {
+            // Recursively scan nested directory.
             walk_directory(&path, files, languages)?;
         } else {
+
             let metadata = std::fs::metadata(&path)?;
 
             let extension = path
@@ -55,11 +64,12 @@ fn walk_directory(
                 .map(|e| e.to_string_lossy().to_string())
                 .unwrap_or_default();
 
-            // Detect language.
+            // Detect language from extension.
             if let Some(language) = detect_language(&path) {
                 languages.insert(language);
             }
 
+            // Store discovered file metadata.
             files.push(ProjectFile {
                 path: path.display().to_string(),
                 extension,
