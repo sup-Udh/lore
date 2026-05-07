@@ -7,6 +7,7 @@
 
 use anyhow::{Context, Result};
 use colored::*;
+use std::path::Path;
 use std::num::NonZeroU32;
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -16,7 +17,7 @@ use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::llama_backend::LlamaBackend as LlamaCppBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaModel, Special};
+use llama_cpp_2::model::{AddBos, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
 
 // PERSISTENT SESSION — global llama.cpp init exactly once.
@@ -37,6 +38,7 @@ pub enum ModelKind {
     Qwen,
     Phi3,
     Mistral,
+    DeepSeek,
 }
 
 impl ModelKind {
@@ -47,6 +49,7 @@ impl ModelKind {
             // Mistral's [INST] template includes its own <s>; we still let
             // llama.cpp handle BOS to match the GGUF metadata.
             ModelKind::Mistral => AddBos::Always,
+            ModelKind::DeepSeek => AddBos::Never,
         }
     }
 
@@ -55,6 +58,7 @@ impl ModelKind {
             ModelKind::Qwen => "Qwen",
             ModelKind::Phi3 => "Phi-3",
             ModelKind::Mistral => "Mistral",
+            ModelKind::DeepSeek => "DeepSeek",
         }
     }
 }
@@ -92,6 +96,13 @@ impl LlamaBackend {
             kind.label()
         );
 
+        if !Path::new(model_path).exists() {
+            anyhow::bail!(
+                "model file not found: {} (expected relative to current working directory)",
+                model_path
+            );
+        }
+
         let backend = get_backend()?;
         let model_params = LlamaModelParams::default();
 
@@ -127,6 +138,14 @@ impl LlamaBackend {
     fn format_prompt(&self, system: &str, user: &str) -> String {
         match self.kind {
             ModelKind::Qwen => format!(
+                "<|im_start|>system\n{}<|im_end|>\n\
+                 <|im_start|>user\n{}<|im_end|>\n\
+                 <|im_start|>assistant\n",
+                system, user
+            ),
+            // deepseek-r1-distill-qwen-* models typically follow Qwen/ChatML formatting
+            // when packaged as GGUF for llama.cpp.
+            ModelKind::DeepSeek => format!(
                 "<|im_start|>system\n{}<|im_end|>\n\
                  <|im_start|>user\n{}<|im_end|>\n\
                  <|im_start|>assistant\n",
@@ -241,7 +260,7 @@ impl LlamaBackend {
             #[allow(deprecated)]
             let piece = self
                 .model
-                .token_to_str(new_token_id, Special::Tokenize)
+                .token_to_str(new_token_id, llama_cpp_2::model::Special::Tokenize)
                 .unwrap_or_default();
             if !piece.is_empty() {
                 on_chunk(&piece);
