@@ -20,11 +20,14 @@ use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
 
-// PERSISTENT SESSION — global llama.cpp init exactly once.
-static BACKEND: OnceLock<LlamaCppBackend> = OnceLock::new();
+// PERSISTENT SESSION — global llama.cpp init exactly once. and use it forever after that for all the models
 
+static BACKEND: OnceLock<LlamaCppBackend> = OnceLock::new(); 
+
+
+// returning the backbone for the project lamma.cpp once and use it forever after that for all the models
 fn get_backend() -> Result<&'static LlamaCppBackend> {
-    if let Some(b) = BACKEND.get() {
+    if let Some(b) = BACKEND.get() { // if backend exists return it or make a new one
         return Ok(b);
     }
     let b = LlamaCppBackend::init().context("LlamaBackend::init failed")?;
@@ -41,15 +44,27 @@ pub enum ModelKind {
     DeepSeek,
 }
 
+// pre model run time behaviour for the model
+
 impl ModelKind {
+    // starting of sequence token
     fn add_bos(&self) -> AddBos {
         match self {
-            // Qwen and Phi-3 use ChatML-style templates that don't need BOS.
             ModelKind::Qwen | ModelKind::Phi3 => AddBos::Never,
-            // Mistral's [INST] template includes its own <s>; we still let
-            // llama.cpp handle BOS to match the GGUF metadata.
             ModelKind::Mistral => AddBos::Always,
             ModelKind::DeepSeek => AddBos::Never,
+        }
+    }
+// where the model stops generation tokens (qwen main usage)
+    fn stop_sequences(&self) -> &'static [&'static str] {
+        match self {
+            // ChatML-style models sometimes emit role delimiters literally.
+            // If we don't stop on these, the model can start "writing" the next user turn.
+            ModelKind::Qwen | ModelKind::DeepSeek => &["<|im_end|>", "<|im_start|>"],
+            // Phi-3 template uses <|end|> markers.
+            ModelKind::Phi3 => &["<|end|>", "<|system|>", "<|user|>", "<|assistant|>"],
+            // Mistral often uses eos; but keeping a conservative textual stop helps if the model emits tags.
+            ModelKind::Mistral => &["</s>", "[INST]", "[/INST]"],
         }
     }
 
@@ -66,7 +81,7 @@ impl ModelKind {
 pub struct LlamaBackend {
     // 'static via Box::leak — model lives for the program's lifetime.
     model: &'static LlamaModel,
-    ctx: LlamaContext<'static>,
+    ctx: LlamaContext<'static>, // ctx plays a major role for tokens, kv cache token history transformer history
     n_ctx: i32,
     max_new_tokens: i32,
     kind: ModelKind,
@@ -76,6 +91,9 @@ pub struct LlamaBackend {
 unsafe impl Send for LlamaBackend {}
 
 impl LlamaBackend {
+    const DEFAULT_SYSTEM_PROMPT: &'static str =
+        "You are Lore, a helpful assistant. Answer the user's question directly and clearly.";
+
     fn debug_enabled() -> bool {
         // Keep stdout clean by default (important for streaming UX).
         // Set LORE_DEBUG=1 to re-enable llama.cpp timing/token logs.
@@ -110,7 +128,6 @@ impl LlamaBackend {
         let model = LlamaModel::load_from_file(backend, model_path, &model_params)
             .with_context(|| format!("failed to load {} GGUF via llama.cpp", kind.label()))?;
         let model: &'static LlamaModel = Box::leak(Box::new(model));
-
         let n_ctx_value: u32 = 2048;
         let ctx_params =
             LlamaContextParams::default().with_n_ctx(NonZeroU32::new(n_ctx_value));
@@ -166,7 +183,7 @@ impl LlamaBackend {
 
     // Default helper for callers that just want a single-shot answer.
     pub fn generate(&mut self, prompt: &str) -> Result<String> {
-        self.generate_with_system("You are a helpful assistant.", prompt)
+        self.generate_with_system(Self::DEFAULT_SYSTEM_PROMPT, prompt)
     }
 
     // REAL-TIME TOKEN STREAMING
@@ -179,7 +196,7 @@ impl LlamaBackend {
     where
         F: FnMut(&str),
     {
-        self.generate_stream_with_system("You are a helpful assistant.", prompt, on_chunk)
+        self.generate_stream_with_system(Self::DEFAULT_SYSTEM_PROMPT, prompt, on_chunk)
     }
 
     // Used by the orchestrator agents (each agent has its own system prompt).
@@ -249,6 +266,15 @@ impl LlamaBackend {
         let mut sampler = LlamaSampler::greedy();
         let mut n_cur = n_prompt;
 
+        // Streaming stop handling:
+        // Some instruct/chat models may literally output template delimiters like
+        // "<|im_end|><|im_start|>user" inside the completion. We cut generation
+        // as soon as we observe any stop sequence for the active ModelKind.
+        let stops = self.kind.stop_sequences();
+        let max_stop_len = stops.iter().map(|s| s.len()).max().unwrap_or(0);
+        let mut pending = String::new();
+        let mut hit_stop = false;
+
         for _ in 0..self.max_new_tokens {
             let new_token_id = sampler.sample(&self.ctx, batch.n_tokens() - 1);
             sampler.accept(new_token_id);
@@ -263,13 +289,50 @@ impl LlamaBackend {
                 .token_to_str(new_token_id, llama_cpp_2::model::Special::Tokenize)
                 .unwrap_or_default();
             if !piece.is_empty() {
-                on_chunk(&piece);
+                pending.push_str(&piece);
+
+                // If any stop sequence appears in pending, emit up to it and stop.
+                if let Some((idx, _stop)) = stops
+                    .iter()
+                    .filter_map(|s| pending.find(s).map(|idx| (idx, *s)))
+                    .min_by_key(|(idx, _)| *idx)
+                {
+                    let safe = &pending[..idx];
+                    if !safe.is_empty() {
+                        on_chunk(safe);
+                    }
+                    hit_stop = true;
+                    pending.clear();
+                    break;
+                }
+
+                // Otherwise, emit everything except a small tail so we can detect
+                // stop sequences that span token boundaries.
+                if max_stop_len > 0 {
+                    let keep = max_stop_len.saturating_sub(1);
+                    if pending.len() > keep {
+                        let emit_len = pending.len() - keep;
+                        let emit = pending[..emit_len].to_string();
+                        pending.drain(..emit_len);
+                        if !emit.is_empty() {
+                            on_chunk(&emit);
+                        }
+                    }
+                } else if max_stop_len == 0 {
+                    on_chunk(&pending);
+                    pending.clear();
+                }
             }
 
             batch.clear();
             batch.add(new_token_id, n_cur, &[0], true)?;
             n_cur += 1;
             self.ctx.decode(&mut batch)?;
+        }
+
+        // Flush any remaining buffered content (only if we didn't hit a stop).
+        if !hit_stop && !pending.is_empty() {
+            on_chunk(&pending);
         }
 
         let n_generated = n_cur - tokens_list.len() as i32;

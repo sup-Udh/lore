@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Chat { model } => match model {
-            ModelChoice::Qwen    => run_chat(ModelKind::Qwen,    "models/qwen2.5-1.5b-instruct-q4_k_m.gguf", "Qwen")?,
+            ModelChoice::Qwen    => run_chat(ModelKind::Qwen,    "models/qwen2.5-7b-instruct-q4_k_m.gguf", "Qwen")?,
             ModelChoice::Phi3    => run_chat(ModelKind::Phi3,    "models/phi3-mini-4k-instruct-q4.gguf",      "Phi-3")?,
             ModelChoice::Mistral => run_chat(ModelKind::Mistral, "models/mistral-7b-v0.3.gguf",                "Mistral")?,
             ModelChoice::DeepSeek => run_chat(ModelKind::DeepSeek, "models/deepseek-r1-distill-qwen-32b.gguf", "DeepSeek")?,
