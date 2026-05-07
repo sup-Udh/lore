@@ -106,6 +106,8 @@ impl LlamaBackend {
         }
     }
 
+    // process for every model that is loaded
+
     pub fn new(model_path: &str, kind: ModelKind) -> Result<Self> {
         let t0 = Instant::now();
         println!(
@@ -127,11 +129,11 @@ impl LlamaBackend {
         println!("{} loading GGUF: {}", "[llama.cpp]".cyan().bold(), model_path);
         let model = LlamaModel::load_from_file(backend, model_path, &model_params)
             .with_context(|| format!("failed to load {} GGUF via llama.cpp", kind.label()))?;
-        let model: &'static LlamaModel = Box::leak(Box::new(model));
+        let model: &'static LlamaModel = Box::leak(Box::new(model)); // memory leak to prevent lifetime issues
         let n_ctx_value: u32 = 2048;
         let ctx_params =
             LlamaContextParams::default().with_n_ctx(NonZeroU32::new(n_ctx_value));
-        let ctx = model
+        let ctx = model // creating a new context for the model.
             .new_context(backend, ctx_params)
             .with_context(|| format!("failed to create llama.cpp context for {}", kind.label()))?;
 
@@ -151,6 +153,9 @@ impl LlamaBackend {
             kind,
         })
     }
+
+    // chat template formatting for the model (specific to the model)
+
 
     fn format_prompt(&self, system: &str, user: &str) -> String {
         match self.kind {
@@ -189,9 +194,6 @@ impl LlamaBackend {
     // REAL-TIME TOKEN STREAMING
     // STREAM TOKENS DIRECTLY TO TERMINAL
     // LOW-LATENCY INFERENCE OUTPUT
-    //
-    // Streams decoded token pieces as soon as llama.cpp produces them.
-    // Callers decide how to display / flush (CLI flushes stdout per chunk).
     pub fn generate_stream<F>(&mut self, prompt: &str, on_chunk: F) -> Result<()>
     where
         F: FnMut(&str),
@@ -207,6 +209,8 @@ impl LlamaBackend {
         self.generate_stream_with_system(system, user, |chunk| out.push_str(chunk))?;
         Ok(out)
     }
+
+    // streaming tokens into the terminal forom the model
 
     pub fn generate_stream_with_system<F>(
         &mut self,
