@@ -1,6 +1,8 @@
 mod api;
 mod backends;
 mod scanner;
+mod summarizer;
+
 
 use anyhow::Result;
 use std::io::{self, Write};
@@ -78,33 +80,90 @@ async fn main() -> Result<()> {
         },
 
         Commands::Open { path } => {
-            use std::path::Path;
 
+            use std::path::Path;
+        
             use scanner::filesystem::scan_project;
             use scanner::lore_dir::initialize_lore_directory;
-
+        
+            use summarizer::selector::select_important_files;
+            use summarizer::summarizer::summarize_file;
+            use summarizer::writer::write_summary;
+        
+            use backends::llama_cpp::{LlamaBackend, ModelKind};        
             println!("\n[LORE] Opening project...\n");
-
+        
             let root = Path::new(&path);
-
+        
+            // PHASE 1 SCAN
             let project_map = scan_project(root)?;
-
-            // Create .lore/ and persist metadata.
+        
+            // CREATE .lore/
             initialize_lore_directory(root, &project_map)?;
-
-            // Print summary.
-            println!("[LORE] Project scan complete!\n");
-
-            println!("Root: {}", project_map.root);
-            println!("Languages: {:?}", project_map.languages);
-            println!("Frameworks: {:?}", project_map.frameworks);
-            println!("Files scanned: {}", project_map.files.len());
-
-            println!("\n[LORE] Project memory initialized in .lore/");
-
-
-            
-
+        
+            println!("[LORE] Project scan complete.");
+        
+            println!(
+                "[LORE] Files scanned: {}",
+                project_map.files.len()
+            );
+        
+            // PHI3 BACKEND
+            let mut phi3_backend = LlamaBackend::new(
+                "models/phi3-mini-4k-instruct-q4.gguf",
+                ModelKind::Phi3,
+            )?;
+        
+            println!("\n[LORE] Phi3 analyzing repository...\n");
+        
+            // AI FILE SELECTION
+            let important_files = select_important_files(
+                &mut phi3_backend,
+                &project_map,
+            )?;
+        
+            println!(
+                "[LORE] Phi3 selected {} important files.\n",
+                important_files.len()
+            );
+        
+            // SUMMARIZE IMPORTANT FILES
+            for file in important_files {
+        
+                println!("[LORE] Summarizing: {}", file.path);
+        
+                let contents = std::fs::read_to_string(&file.path)
+                    .unwrap_or_default();
+        
+                // Prevent huge prompts.
+                if contents.len() > 25_000 {
+                    continue;
+                }
+        
+                let summary = summarize_file(
+                    &mut phi3_backend,
+                    &file.path,
+                    &contents,
+                )?;
+        
+                let output_name = format!(
+                    "{}.md",
+                    std::path::Path::new(&file.path)
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                );
+        
+                write_summary(
+                    root,
+                    &output_name,
+                    &summary,
+                )?;
+            }
+        
+            println!(
+                "\n[LORE] Repository summaries generated successfully."
+            );
         }
     }
 

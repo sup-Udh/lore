@@ -1,14 +1,18 @@
 use anyhow::Result;
-use crate::backends::Backend;
-use crate::scanner::project_map::{ProjectFile, ProjectMap}
 
+use crate::backends::llama_cpp::LlamaBackend;
+use crate::scanner::project_map::{ProjectFile, ProjectMap};
 
+// Uses Phi3 to intelligently select the most
+// important repository files.
+//
+// Phi3 reads the generated project map FIRST,
+// then determines which files matter most.
 pub fn select_important_files(
-    backend: &mut dyn Backend,
+    backend: &mut LlamaBackend,
     project_map: &ProjectMap,
 ) -> Result<Vec<ProjectFile>> {
 
-    // Compress file list for prompt efficiency.
     let file_preview = project_map
         .files
         .iter()
@@ -19,9 +23,7 @@ pub fn select_important_files(
 
     let prompt = format!(
 r#"
-You are Lore's repository analysis agent.
-
-Below is metadata about a software project.
+You are Lore's repository analysis engine.
 
 Project Root:
 {}
@@ -36,16 +38,16 @@ Files:
 {}
 
 Your task:
-- determine which files are MOST important
+- determine the MOST important repository files
 - prioritize:
-  - architecture
-  - runtime logic
   - entrypoints
   - APIs
-  - model orchestration
-  - routing
+  - orchestration
   - infrastructure
-  - configuration
+  - model logic
+  - architecture
+  - routing
+  - runtime systems
 
 Avoid:
 - generated files
@@ -76,7 +78,7 @@ One path per line.
         .filter(|file| {
             important_paths
                 .iter()
-                .any(|path| file.path.contains(path))
+                .any(|p| file.path.contains(p))
         })
         .cloned()
         .collect();
