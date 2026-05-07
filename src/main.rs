@@ -102,9 +102,19 @@ fn chat_loop(backend: &mut LlamaBackend, model_name: &str) -> Result<()> {
         if input.is_empty() { continue; }
 
         if model_name == "Qwen" {
+            // REAL-TIME TOKEN STREAMING
+            // STREAM TOKENS DIRECTLY TO TERMINAL
+            // LOW-LATENCY INFERENCE OUTPUT
+            //
             // Qwen — direct, no agents
-            let response = backend.generate(input)?;
-            println!("\n{}: {}", model_name.purple().bold(), response);
+            let mut out = io::stdout();
+            write!(out, "\n{}: ", model_name.purple().bold())?;
+            out.flush()?;
+            backend.generate_stream(input, |chunk| {
+                let _ = write!(out, "{}", chunk);
+                let _ = out.flush();
+            })?;
+            writeln!(out)?;
         } else {
             // MULTI-AGENT PIPELINE TEMPORARILY DISABLED
             // DIRECT INFERENCE MODE ENABLED
@@ -112,8 +122,17 @@ fn chat_loop(backend: &mut LlamaBackend, model_name: &str) -> Result<()> {
             //
             // Phi-3 / Mistral now follow the same direct llama.cpp inference path as Qwen.
             // All agent/orchestrator code remains in-tree for later re-enabling.
-            let response = backend.generate(input)?;
-            println!("\n{}: {}", model_name.purple().bold(), response);
+            // REAL-TIME TOKEN STREAMING
+            // STREAM TOKENS DIRECTLY TO TERMINAL
+            // LOW-LATENCY INFERENCE OUTPUT
+            let mut out = io::stdout();
+            write!(out, "\n{}: ", model_name.purple().bold())?;
+            out.flush()?;
+            backend.generate_stream(input, |chunk| {
+                let _ = write!(out, "{}", chunk);
+                let _ = out.flush();
+            })?;
+            writeln!(out)?;
         }
     }
     Ok(())

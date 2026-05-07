@@ -72,6 +72,18 @@ pub struct LlamaBackend {
 unsafe impl Send for LlamaBackend {}
 
 impl LlamaBackend {
+    fn debug_enabled() -> bool {
+        // Keep stdout clean by default (important for streaming UX).
+        // Set LORE_DEBUG=1 to re-enable llama.cpp timing/token logs.
+        match std::env::var("LORE_DEBUG") {
+            Ok(v) => {
+                let v = v.trim().to_ascii_lowercase();
+                !(v.is_empty() || v == "0" || v == "false" || v == "no")
+            }
+            Err(_) => false,
+        }
+    }
+
     pub fn new(model_path: &str, kind: ModelKind) -> Result<Self> {
         let t0 = Instant::now();
         println!(
@@ -138,14 +150,45 @@ impl LlamaBackend {
         self.generate_with_system("You are a helpful assistant.", prompt)
     }
 
+    // REAL-TIME TOKEN STREAMING
+    // STREAM TOKENS DIRECTLY TO TERMINAL
+    // LOW-LATENCY INFERENCE OUTPUT
+    //
+    // Streams decoded token pieces as soon as llama.cpp produces them.
+    // Callers decide how to display / flush (CLI flushes stdout per chunk).
+    pub fn generate_stream<F>(&mut self, prompt: &str, on_chunk: F) -> Result<()>
+    where
+        F: FnMut(&str),
+    {
+        self.generate_stream_with_system("You are a helpful assistant.", prompt, on_chunk)
+    }
+
     // Used by the orchestrator agents (each agent has its own system prompt).
     pub fn generate_with_system(&mut self, system: &str, user: &str) -> Result<String> {
+        // Maintain the existing API for serve-mode and any future callers by
+        // collecting streamed chunks into a single String.
+        let mut out = String::new();
+        self.generate_stream_with_system(system, user, |chunk| out.push_str(chunk))?;
+        Ok(out)
+    }
+
+    pub fn generate_stream_with_system<F>(
+        &mut self,
+        system: &str,
+        user: &str,
+        mut on_chunk: F,
+    ) -> Result<()>
+    where
+        F: FnMut(&str),
+    {
         let t0 = Instant::now();
-        println!(
-            "{} generate() called ({})",
-            "[llama.cpp]".cyan().bold(),
-            self.kind.label()
-        );
+        if Self::debug_enabled() {
+            println!(
+                "{} generate_stream() ({})",
+                "[llama.cpp]".cyan().bold(),
+                self.kind.label()
+            );
+        }
 
         let formatted = self.format_prompt(system, user);
 
@@ -154,12 +197,14 @@ impl LlamaBackend {
             .str_to_token(&formatted, self.kind.add_bos())
             .context("tokenization failed")?;
 
-        println!(
-            "{} prompt = {} tokens, max_new = {}",
-            "[llama.cpp]".cyan().bold(),
-            tokens_list.len(),
-            self.max_new_tokens
-        );
+        if Self::debug_enabled() {
+            println!(
+                "{} prompt = {} tokens, max_new = {}",
+                "[llama.cpp]".cyan().bold(),
+                tokens_list.len(),
+                self.max_new_tokens
+            );
+        }
 
         // PERSISTENT SESSION — wipe KV cache without freeing buffers.
         self.ctx.clear_kv_cache();
@@ -184,7 +229,6 @@ impl LlamaBackend {
 
         let mut sampler = LlamaSampler::greedy();
         let mut n_cur = n_prompt;
-        let mut output = String::new();
 
         for _ in 0..self.max_new_tokens {
             let new_token_id = sampler.sample(&self.ctx, batch.n_tokens() - 1);
@@ -199,7 +243,9 @@ impl LlamaBackend {
                 .model
                 .token_to_str(new_token_id, Special::Tokenize)
                 .unwrap_or_default();
-            output.push_str(&piece);
+            if !piece.is_empty() {
+                on_chunk(&piece);
+            }
 
             batch.clear();
             batch.add(new_token_id, n_cur, &[0], true)?;
@@ -214,14 +260,16 @@ impl LlamaBackend {
         } else {
             0.0
         };
-        println!(
-            "{} done: {} tokens in {:.2}s ({:.1} tok/s)",
-            "[llama.cpp]".cyan().bold(),
-            n_generated,
-            elapsed,
-            tps
-        );
+        if Self::debug_enabled() {
+            println!(
+                "\n{} done: {} tokens in {:.2}s ({:.1} tok/s)",
+                "[llama.cpp]".cyan().bold(),
+                n_generated,
+                elapsed,
+                tps
+            );
+        }
 
-        Ok(output)
+        Ok(())
     }
 }
