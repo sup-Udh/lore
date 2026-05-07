@@ -80,9 +80,8 @@ async fn main() -> Result<()> {
         },
 
         Commands::Open { path } => {
-
             use std::path::Path;
-        
+
             use scanner::filesystem::scan_project;
             use scanner::lore_dir::initialize_lore_directory;
         
@@ -90,31 +89,30 @@ async fn main() -> Result<()> {
             use summarizer::summarizer::summarize_file;
             use summarizer::writer::write_summary;
         
-            use backends::llama_cpp::{LlamaBackend, ModelKind};        
+            use backends::llama_cpp::{LlamaBackend, ModelKind};
+        
             println!("\n[LORE] Opening project...\n");
         
             let root = Path::new(&path);
         
-            // PHASE 1 SCAN
+            // PHASE 1 — SCAN REPOSITORY
             let project_map = scan_project(root)?;
         
             // CREATE .lore/
             initialize_lore_directory(root, &project_map)?;
         
-            println!("[LORE] Project scan complete.");
-        
             println!(
-                "[LORE] Files scanned: {}",
+                "[LORE] Scan complete. Files discovered: {}\n",
                 project_map.files.len()
             );
         
-            // PHI3 BACKEND
+            // PHI3 REPOSITORY ANALYSIS BACKEND
             let mut phi3_backend = LlamaBackend::new(
                 "models/phi3-mini-4k-instruct-q4.gguf",
                 ModelKind::Phi3,
             )?;
         
-            println!("\n[LORE] Phi3 analyzing repository...\n");
+            println!("[LORE] Phi3 selecting important files...\n");
         
             // AI FILE SELECTION
             let important_files = select_important_files(
@@ -127,16 +125,33 @@ async fn main() -> Result<()> {
                 important_files.len()
             );
         
-            // SUMMARIZE IMPORTANT FILES
+            // FILE SUMMARIZATION
             for file in important_files {
         
-                println!("[LORE] Summarizing: {}", file.path);
+                println!(
+                    "[LORE] Summarizing: {}",
+                    file.path
+                );
         
-                let contents = std::fs::read_to_string(&file.path)
+                // IMPORTANT:
+                //
+                // Read relative file from repository root.
+                let full_path = root.join(&file.path);
+        
+                let contents = std::fs::read_to_string(&full_path)
                     .unwrap_or_default();
         
-                // Prevent huge prompts.
-                if contents.len() > 25_000 {
+                // Prevent gigantic prompts.
+                //
+                // This limit will later become:
+                // - chunking
+                // - embeddings
+                // - retrieval
+                if contents.len() > 20_000 {
+                    println!(
+                        "[LORE] Skipping oversized file: {}",
+                        file.path
+                    );
                     continue;
                 }
         
@@ -165,6 +180,8 @@ async fn main() -> Result<()> {
                 "\n[LORE] Repository summaries generated successfully."
             );
         }
+
+           
     }
 
     Ok(())

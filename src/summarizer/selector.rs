@@ -3,21 +3,32 @@ use anyhow::Result;
 use crate::backends::llama_cpp::LlamaBackend;
 use crate::scanner::project_map::{ProjectFile, ProjectMap};
 
-// Uses Phi3 to intelligently select the most
-// important repository files.
+// Uses Phi3 to intelligently determine
+// which files are most important.
 //
-// Phi3 reads the generated project map FIRST,
-// then determines which files matter most.
+// IMPORTANT:
+//
+// We intentionally compress repository data
+// before sending it to Phi3 because:
+//
+// AI repository systems are heavily constrained
+// by context windows.
 pub fn select_important_files(
     backend: &mut LlamaBackend,
     project_map: &ProjectMap,
 ) -> Result<Vec<ProjectFile>> {
 
+    // VERY IMPORTANT:
+    //
+    // Limit repository preview size aggressively.
+    //
+    // Large repositories can easily overflow
+    // Phi3's context window.
     let file_preview = project_map
         .files
         .iter()
-        .take(200)
-        .map(|f| format!("{} ({})", f.path, f.size))
+        .take(50)
+        .map(|f| f.path.clone())
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -25,40 +36,34 @@ pub fn select_important_files(
 r#"
 You are Lore's repository analysis engine.
 
-Project Root:
-{}
-
-Languages:
+Project languages:
 {:?}
 
-Frameworks:
+Project frameworks:
 {:?}
 
-Files:
+Repository files:
 {}
 
-Your task:
-- determine the MOST important repository files
-- prioritize:
-  - entrypoints
-  - APIs
-  - orchestration
-  - infrastructure
-  - model logic
-  - architecture
-  - routing
-  - runtime systems
+Select the MOST important files.
+
+Prioritize:
+- entrypoints
+- APIs
+- orchestration
+- runtime logic
+- architecture
+- infrastructure
+- configuration
 
 Avoid:
 - generated files
 - binaries
 - build artifacts
-- temporary files
 
-Return ONLY important file paths.
+Return ONLY file paths.
 One path per line.
 "#,
-        project_map.root,
         project_map.languages,
         project_map.frameworks,
         file_preview
@@ -68,8 +73,8 @@ One path per line.
 
     let important_paths: Vec<String> = response
         .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
         .collect();
 
     let selected = project_map
@@ -78,7 +83,9 @@ One path per line.
         .filter(|file| {
             important_paths
                 .iter()
-                .any(|p| file.path.contains(p))
+                .any(|important| {
+                    file.path.contains(important)
+                })
         })
         .cloned()
         .collect();

@@ -7,12 +7,25 @@ use super::detector::{detect_frameworks, detect_language};
 use super::ignore::should_ignore;
 use super::project_map::{ProjectFile, ProjectMap};
 
-
+// Main project scanner.
+//
+// Responsibilities:
+// - recursively walk filesystem
+// - ignore junk folders
+// - collect metadata
+// - detect languages/frameworks
+// - build ProjectMap
 pub fn scan_project(root: &Path) -> Result<ProjectMap> {
+
     let mut files = Vec::new();
     let mut languages = HashSet::new();
 
-    walk_directory(root, &mut files, &mut languages)?;
+    walk_directory(
+        root,
+        root,
+        &mut files,
+        &mut languages,
+    )?;
 
     let frameworks = detect_frameworks(root);
 
@@ -25,29 +38,40 @@ pub fn scan_project(root: &Path) -> Result<ProjectMap> {
 }
 
 // Recursive filesystem traversal.
+//
+// root = original project root
+// dir  = current recursive directory
 fn walk_directory(
+    root: &Path,
     dir: &Path,
     files: &mut Vec<ProjectFile>,
     languages: &mut HashSet<String>,
 ) -> Result<()> {
 
-    // Ignore unwanted folders.
+    // Skip ignored directories.
     if should_ignore(dir) {
         return Ok(());
     }
 
     for entry in std::fs::read_dir(dir)? {
+
         let entry = entry?;
         let path: PathBuf = entry.path();
 
-        // Skip ignored paths.
         if should_ignore(&path) {
             continue;
         }
 
         if path.is_dir() {
-            // Recursively scan nested directory.
-            walk_directory(&path, files, languages)?;
+
+            // Recursive traversal.
+            walk_directory(
+                root,
+                &path,
+                files,
+                languages,
+            )?;
+
         } else {
 
             let metadata = std::fs::metadata(&path)?;
@@ -57,14 +81,23 @@ fn walk_directory(
                 .map(|e| e.to_string_lossy().to_string())
                 .unwrap_or_default();
 
-            // Detect language from extension.
+            // Lightweight language detection.
             if let Some(language) = detect_language(&path) {
                 languages.insert(language);
             }
 
-            // Store discovered file metadata.
+            // IMPORTANT:
+            // Store RELATIVE paths instead of gigantic absolute Windows paths.
+            //
+            // This massively reduces token usage later.
+            let relative_path = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .display()
+                .to_string();
+
             files.push(ProjectFile {
-                path: path.display().to_string(),
+                path: relative_path,
                 extension,
                 size: metadata.len(),
             });

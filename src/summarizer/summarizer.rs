@@ -10,21 +10,26 @@ pub fn summarize_file(
     contents: &str,
 ) -> Result<String> {
 
+    // IMPORTANT:
+    //
+    // Keep prompts concise.
+    //
+    // Long prompts reduce:
+    // - generation quality
+    // - inference speed
+    // - available context for code
     let prompt = format!(
 r#"
-You are Lore's software analysis engine.
-
-Your task:
-- explain the purpose of this file
-- explain its role in the architecture
-- summarize important logic
-- explain engineering responsibilities
-- describe relationships to the repository
-
-Keep explanations concise but technically useful.
+Explain this repository file.
 
 File:
 {}
+
+Tasks:
+- explain purpose
+- explain role in architecture
+- summarize important logic
+- describe engineering responsibility
 
 Code:
 {}
