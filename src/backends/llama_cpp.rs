@@ -154,6 +154,19 @@ impl LlamaBackend {
         })
     }
 
+    pub fn n_ctx(&self) -> i32 {
+        self.n_ctx
+    }
+
+    pub fn count_tokens_with_system(&self, system: &str, user: &str) -> Result<usize> {
+        let formatted = self.format_prompt(system, user);
+        let tokens_list = self
+            .model
+            .str_to_token(&formatted, self.kind.add_bos())
+            .context("tokenization failed")?;
+        Ok(tokens_list.len())
+    }
+
     // chat template formatting for the model (specific to the model)
 
 
@@ -191,6 +204,10 @@ impl LlamaBackend {
         self.generate_with_system(Self::DEFAULT_SYSTEM_PROMPT, prompt)
     }
 
+    pub fn generate_with_limits(&mut self, prompt: &str, max_new_tokens: i32) -> Result<String> {
+        self.generate_with_system_limits(Self::DEFAULT_SYSTEM_PROMPT, prompt, max_new_tokens)
+    }
+
     // REAL-TIME TOKEN STREAMING
     // STREAM TOKENS DIRECTLY TO TERMINAL
     // LOW-LATENCY INFERENCE OUTPUT
@@ -210,12 +227,38 @@ impl LlamaBackend {
         Ok(out)
     }
 
+    pub fn generate_with_system_limits(
+        &mut self,
+        system: &str,
+        user: &str,
+        max_new_tokens: i32,
+    ) -> Result<String> {
+        let mut out = String::new();
+        self.generate_stream_with_system_limits(system, user, max_new_tokens, |chunk| {
+            out.push_str(chunk)
+        })?;
+        Ok(out)
+    }
+
     // streaming tokens into the terminal forom the model
 
     pub fn generate_stream_with_system<F>(
         &mut self,
         system: &str,
         user: &str,
+        on_chunk: F,
+    ) -> Result<()>
+    where
+        F: FnMut(&str),
+    {
+        self.generate_stream_with_system_limits(system, user, self.max_new_tokens, on_chunk)
+    }
+
+    pub fn generate_stream_with_system_limits<F>(
+        &mut self,
+        system: &str,
+        user: &str,
+        max_new_tokens: i32,
         mut on_chunk: F,
     ) -> Result<()>
     where
@@ -242,7 +285,7 @@ impl LlamaBackend {
                 "{} prompt = {} tokens, max_new = {}",
                 "[llama.cpp]".cyan().bold(),
                 tokens_list.len(),
-                self.max_new_tokens
+                max_new_tokens
             );
         }
 
@@ -250,11 +293,11 @@ impl LlamaBackend {
         self.ctx.clear_kv_cache();
 
         let n_prompt = tokens_list.len() as i32;
-        if n_prompt + self.max_new_tokens > self.n_ctx {
+        if n_prompt + max_new_tokens > self.n_ctx {
             anyhow::bail!(
                 "prompt ({} tokens) + max generation ({}) exceeds context ({})",
                 n_prompt,
-                self.max_new_tokens,
+                max_new_tokens,
                 self.n_ctx
             );
         }
@@ -279,7 +322,7 @@ impl LlamaBackend {
         let mut pending = String::new();
         let mut hit_stop = false;
 
-        for _ in 0..self.max_new_tokens {
+        for _ in 0..max_new_tokens {
             let new_token_id = sampler.sample(&self.ctx, batch.n_tokens() - 1);
             sampler.accept(new_token_id);
 

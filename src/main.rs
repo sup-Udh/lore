@@ -141,20 +141,6 @@ async fn main() -> Result<()> {
                 let contents = std::fs::read_to_string(&full_path)
                     .unwrap_or_default();
         
-                // Prevent gigantic prompts.
-                //
-                // This limit will later become:
-                // - chunking
-                // - embeddings
-                // - retrieval
-                if contents.len() > 20_000 {
-                    println!(
-                        "[LORE] Skipping oversized file: {}",
-                        file.path
-                    );
-                    continue;
-                }
-        
                 let summary = summarize_file(
                     &mut phi3_backend,
                     &file.path,

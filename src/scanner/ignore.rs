@@ -7,11 +7,21 @@ const IGNORED_DIRS: &[&str] = &[
     "target",
     "node_modules",
     ".git",
+    ".lore",
     "dist",
     "build",
     ".next",
     "coverage",
     "vendor",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".idea",
+    ".vscode",
+    ".cargo",
+    ".gradle",
+    ".mypy_cache",
+    ".pytest_cache",
 ];
 
 // Checks whether a path should be ignored.
