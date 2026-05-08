@@ -2,6 +2,7 @@ mod api;
 mod backends;
 mod scanner;
 mod summarizer;
+mod runtime;
 
 
 use anyhow::Result;
@@ -30,6 +31,10 @@ enum Commands {
     },
     Open {
         path: String,
+        #[arg(long)]
+        workers: Option<usize>,
+        #[arg(long)]
+        threads_per_worker: Option<usize>,
     },
 }
 
@@ -79,15 +84,17 @@ async fn main() -> Result<()> {
             ModelChoice::DeepSeek => run_serve(ModelKind::DeepSeek, "models/deepseek-r1-distill-qwen-32b.gguf", "DeepSeek").await?,
         },
 
-        Commands::Open { path } => {
+        Commands::Open { path, workers, threads_per_worker } => {
             use std::path::Path;
 
             use scanner::filesystem::scan_project;
             use scanner::lore_dir::initialize_lore_directory;
         
             use summarizer::selector::select_important_files;
-            use summarizer::summarizer::summarize_file;
             use summarizer::writer::write_summary;
+            use runtime::pool::SummarizationPool;
+            use runtime::progress::{ProgressEvent, ProgressRenderer};
+            use runtime::worker::SummaryTask;
         
             use backends::llama_cpp::{LlamaBackend, ModelKind};
         
@@ -124,47 +131,104 @@ async fn main() -> Result<()> {
                 "[LORE] Phi3 selected {} important files.\n",
                 important_files.len()
             );
-        
-            // FILE SUMMARIZATION
-            for file in important_files {
-        
-                println!(
-                    "[LORE] Summarizing: {}",
-                    file.path
-                );
-        
-                // IMPORTANT:
-                //
-                // Read relative file from repository root.
-                let full_path = root.join(&file.path);
-        
-                let contents = std::fs::read_to_string(&full_path)
-                    .unwrap_or_default();
-        
-                let summary = summarize_file(
-                    &mut phi3_backend,
-                    &file.path,
-                    &contents,
-                )?;
-        
-                let output_name = format!(
-                    "{}.md",
-                    std::path::Path::new(&file.path)
-                        .file_name()
-                        .unwrap()
-                        .to_string_lossy()
-                );
-        
-                write_summary(
-                    root,
-                    &output_name,
-                    &summary,
-                )?;
+
+            // PHASE 3 — CONCURRENT SUMMARIZATION
+            let total = important_files.len();
+            if total == 0 {
+                println!("[LORE] No important files selected.");
+                return Ok(());
             }
-        
+
+            let available = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4);
+
+            let workers = workers.unwrap_or_else(|| {
+                // Conservative default: avoid oversubscription (llama.cpp uses CPU threads internally).
+                // If we have >= 8 cores, use 4 workers; else use 2; always at least 1.
+                if available >= 8 { 4 } else if available >= 4 { 2 } else { 1 }
+            }).max(1);
+
+            let threads_per_worker = threads_per_worker.unwrap_or_else(|| {
+                let t = available / workers;
+                std::cmp::max(1, t)
+            }).max(1);
+
+            // Reduce global thread pools so N workers don't multiply CPU threads.
+            std::env::set_var("RAYON_NUM_THREADS", threads_per_worker.to_string());
+            std::env::set_var("OMP_NUM_THREADS", threads_per_worker.to_string());
+            // Best-effort attempt to reduce llama.cpp native logging noise by default.
+            // (If you want full llama.cpp logs, set LORE_DEBUG=1.)
+            std::env::set_var("LLAMA_LOG_LEVEL", "0");
+
             println!(
-                "\n[LORE] Repository summaries generated successfully."
+                "[LORE] Summarizing in parallel (workers={}, threads/worker={}, cpus={})\n",
+                workers, threads_per_worker, available
             );
+
+            // Progress renderer runs in a small helper thread consuming events.
+            let mut pool = SummarizationPool::new(
+                "models/phi3-mini-4k-instruct-q4.gguf",
+                ModelKind::Phi3,
+                workers,
+            );
+
+            let progress_rx = pool.take_progress_rx();
+            let progress_tx = pool.progress_sender();
+            let progress_handle = std::thread::spawn(move || {
+                let mut renderer = ProgressRenderer::new(total);
+                renderer.handle(ProgressEvent::Phase("Summarizing files"));
+                for ev in progress_rx {
+                    renderer.handle(ev);
+                }
+            });
+
+            // Enqueue tasks (read file contents on main thread; inference happens in workers).
+            for file in important_files {
+                let full_path = root.join(&file.path);
+                let contents = std::fs::read_to_string(&full_path).unwrap_or_default();
+                // Use a stable, unique output name based on relative path to avoid overwriting
+                // summaries for common basenames like `mod.rs`.
+                let mut safe = file
+                    .path
+                    .replace('\\', "__")
+                    .replace('/', "__")
+                    .replace(':', "_");
+                if safe.len() > 180 {
+                    safe.truncate(180);
+                }
+                let output_name = format!("{}.md", safe);
+                pool.submit(SummaryTask {
+                    path: file.path,
+                    contents,
+                    output_name,
+                });
+            }
+
+            // Collect results and persist as they arrive.
+            let mut done = 0usize;
+            while done < total {
+                match pool.result_rx.recv() {
+                    Ok(Ok(res)) => {
+                        write_summary(root, &res.output_name, &res.summary)?;
+                        let _ = progress_tx.send(ProgressEvent::Persisted { path: res.path });
+                        done += 1;
+                    }
+                    Ok(Err((_path, _err))) => {
+                        // Still count it as "completed" so the run can finish.
+                        done += 1;
+                    }
+                    Err(_) => break,
+                }
+            }
+
+            // Close workers and progress.
+            pool.shutdown();
+            let _ = progress_tx.send(ProgressEvent::Completed { done, total });
+            drop(progress_tx);
+            let _ = progress_handle.join();
+
+            println!("\n[LORE] Repository summaries generated successfully.");
         }
 
            

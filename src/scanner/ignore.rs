@@ -22,6 +22,8 @@ const IGNORED_DIRS: &[&str] = &[
     ".gradle",
     ".mypy_cache",
     ".pytest_cache",
+    ".gitignore",
+    "package-lock.json"
 ];
 
 // Checks whether a path should be ignored.

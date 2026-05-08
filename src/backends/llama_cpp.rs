@@ -7,8 +7,10 @@
 
 use anyhow::{Context, Result};
 use colored::*;
+use std::collections::HashMap;
 use std::path::Path;
 use std::num::NonZeroU32;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -24,6 +26,11 @@ use llama_cpp_2::sampling::LlamaSampler;
 
 static BACKEND: OnceLock<LlamaCppBackend> = OnceLock::new(); 
 
+// Global model cache to avoid re-loading GGUF per worker.
+// Each summarization worker must have its own LlamaContext, but the LlamaModel
+// can be shared safely (read-only weights) once loaded.
+static MODELS: OnceLock<Mutex<HashMap<String, &'static LlamaModel>>> = OnceLock::new();
+
 
 // returning the backbone for the project lamma.cpp once and use it forever after that for all the models
 fn get_backend() -> Result<&'static LlamaCppBackend> {
@@ -33,6 +40,31 @@ fn get_backend() -> Result<&'static LlamaCppBackend> {
     let b = LlamaCppBackend::init().context("LlamaBackend::init failed")?;
     let _ = BACKEND.set(b);
     Ok(BACKEND.get().expect("backend just set"))
+}
+
+fn get_or_load_model(model_path: &str, kind: ModelKind) -> Result<&'static LlamaModel> {
+    let key = format!("{}::{}", model_path, kind.label());
+    let cache = MODELS.get_or_init(|| Mutex::new(HashMap::new()));
+
+    if let Some(m) = cache.lock().expect("model cache lock").get(&key) {
+        return Ok(*m);
+    }
+
+    let backend = get_backend()?;
+    let model_params = LlamaModelParams::default();
+    if LlamaBackend::debug_enabled() {
+        println!("{} loading GGUF: {}", "[llama.cpp]".cyan().bold(), model_path);
+    }
+    let model = LlamaModel::load_from_file(backend, model_path, &model_params)
+        .with_context(|| format!("failed to load {} GGUF via llama.cpp", kind.label()))?;
+    let model: &'static LlamaModel = Box::leak(Box::new(model));
+
+    cache
+        .lock()
+        .expect("model cache lock")
+        .insert(key, model);
+
+    Ok(model)
 }
 
 // Per-model differences — only the chat template and AddBos policy differ.
@@ -110,11 +142,13 @@ impl LlamaBackend {
 
     pub fn new(model_path: &str, kind: ModelKind) -> Result<Self> {
         let t0 = Instant::now();
-        println!(
-            "{} initializing backend for {} (one-time)...",
-            "[llama.cpp]".cyan().bold(),
-            kind.label()
-        );
+        if Self::debug_enabled() {
+            println!(
+                "{} initializing backend for {} (one-time)...",
+                "[llama.cpp]".cyan().bold(),
+                kind.label()
+            );
+        }
 
         if !Path::new(model_path).exists() {
             anyhow::bail!(
@@ -124,12 +158,7 @@ impl LlamaBackend {
         }
 
         let backend = get_backend()?;
-        let model_params = LlamaModelParams::default();
-
-        println!("{} loading GGUF: {}", "[llama.cpp]".cyan().bold(), model_path);
-        let model = LlamaModel::load_from_file(backend, model_path, &model_params)
-            .with_context(|| format!("failed to load {} GGUF via llama.cpp", kind.label()))?;
-        let model: &'static LlamaModel = Box::leak(Box::new(model)); // memory leak to prevent lifetime issues
+        let model = get_or_load_model(model_path, kind)?;
         let n_ctx_value: u32 = 2048;
         let ctx_params =
             LlamaContextParams::default().with_n_ctx(NonZeroU32::new(n_ctx_value));
@@ -137,13 +166,15 @@ impl LlamaBackend {
             .new_context(backend, ctx_params)
             .with_context(|| format!("failed to create llama.cpp context for {}", kind.label()))?;
 
-        println!(
-            "{} {} ready (n_ctx={}, load_time={:.2}s)",
-            "[llama.cpp]".cyan().bold(),
-            kind.label(),
-            n_ctx_value,
-            t0.elapsed().as_secs_f32()
-        );
+        if Self::debug_enabled() {
+            println!(
+                "{} {} ready (n_ctx={}, load_time={:.2}s)",
+                "[llama.cpp]".cyan().bold(),
+                kind.label(),
+                n_ctx_value,
+                t0.elapsed().as_secs_f32()
+            );
+        }
 
         Ok(Self {
             model,

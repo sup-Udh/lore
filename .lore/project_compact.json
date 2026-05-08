@@ -1,0 +1,46 @@
+{
+  "root": ".",
+  "languages": [
+    "Rust"
+  ],
+  "frameworks": [
+    "Axum",
+    "Candle",
+    "Tokio",
+    "Cargo",
+    "llama.cpp"
+  ],
+  "file_count": 30,
+  "file_preview": [
+    "Cargo.lock",
+    "Cargo.toml",
+    "models\\.cache\\huggingface\\CACHEDIR.TAG",
+    "models\\.cache\\huggingface\\download\\qwen2.5-1.5b-instruct-q4_k_m.gguf.metadata",
+    "models\\.cache\\huggingface\\download\\tokenizer.json.metadata",
+    "models\\deepseek-r1-distill-qwen-32b.gguf",
+    "models\\mistral-7b-v0.3.gguf",
+    "models\\phi3-mini-4k-instruct-q4.gguf",
+    "models\\qwen2.5-1.5b-instruct-q4_k_m.gguf",
+    "models\\qwen2.5-7b-instruct-q4_k_m.gguf",
+    "README.md",
+    "src\\api\\mod.rs",
+    "src\\backends\\llama_cpp.rs",
+    "src\\backends\\mod.rs",
+    "src\\main.rs",
+    "src\\runtime\\mod.rs",
+    "src\\runtime\\pool.rs",
+    "src\\runtime\\progress.rs",
+    "src\\runtime\\scheduler.rs",
+    "src\\runtime\\worker.rs",
+    "src\\scanner\\detector.rs",
+    "src\\scanner\\filesystem.rs",
+    "src\\scanner\\ignore.rs",
+    "src\\scanner\\lore_dir.rs",
+    "src\\scanner\\mod.rs",
+    "src\\scanner\\project_map.rs",
+    "src\\summarizer\\mod.rs",
+    "src\\summarizer\\selector.rs",
+    "src\\summarizer\\summarizer.rs",
+    "src\\summarizer\\writer.rs"
+  ]
+}

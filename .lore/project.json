@@ -1,0 +1,165 @@
+{
+  "root": ".",
+  "languages": [
+    "Rust"
+  ],
+  "frameworks": [
+    "Axum",
+    "Candle",
+    "Tokio",
+    "Cargo",
+    "llama.cpp"
+  ],
+  "files": [
+    {
+      "path": "Cargo.lock",
+      "extension": "lock",
+      "size": 57642
+    },
+    {
+      "path": "Cargo.toml",
+      "extension": "toml",
+      "size": 690
+    },
+    {
+      "path": "models\\.cache\\huggingface\\CACHEDIR.TAG",
+      "extension": "TAG",
+      "size": 195
+    },
+    {
+      "path": "models\\.cache\\huggingface\\download\\qwen2.5-1.5b-instruct-q4_k_m.gguf.metadata",
+      "extension": "metadata",
+      "size": 128
+    },
+    {
+      "path": "models\\.cache\\huggingface\\download\\tokenizer.json.metadata",
+      "extension": "metadata",
+      "size": 104
+    },
+    {
+      "path": "models\\deepseek-r1-distill-qwen-32b.gguf",
+      "extension": "gguf",
+      "size": 4083015904
+    },
+    {
+      "path": "models\\mistral-7b-v0.3.gguf",
+      "extension": "gguf",
+      "size": 4372812000
+    },
+    {
+      "path": "models\\phi3-mini-4k-instruct-q4.gguf",
+      "extension": "gguf",
+      "size": 2393231072
+    },
+    {
+      "path": "models\\qwen2.5-1.5b-instruct-q4_k_m.gguf",
+      "extension": "gguf",
+      "size": 1117320736
+    },
+    {
+      "path": "models\\qwen2.5-7b-instruct-q4_k_m.gguf",
+      "extension": "gguf",
+      "size": 4683074240
+    },
+    {
+      "path": "README.md",
+      "extension": "md",
+      "size": 707
+    },
+    {
+      "path": "src\\api\\mod.rs",
+      "extension": "rs",
+      "size": 2184
+    },
+    {
+      "path": "src\\backends\\llama_cpp.rs",
+      "extension": "rs",
+      "size": 14808
+    },
+    {
+      "path": "src\\backends\\mod.rs",
+      "extension": "rs",
+      "size": 225
+    },
+    {
+      "path": "src\\main.rs",
+      "extension": "rs",
+      "size": 11115
+    },
+    {
+      "path": "src\\runtime\\mod.rs",
+      "extension": "rs",
+      "size": 68
+    },
+    {
+      "path": "src\\runtime\\pool.rs",
+      "extension": "rs",
+      "size": 2177
+    },
+    {
+      "path": "src\\runtime\\progress.rs",
+      "extension": "rs",
+      "size": 3077
+    },
+    {
+      "path": "src\\runtime\\scheduler.rs",
+      "extension": "rs",
+      "size": 253
+    },
+    {
+      "path": "src\\runtime\\worker.rs",
+      "extension": "rs",
+      "size": 2210
+    },
+    {
+      "path": "src\\scanner\\detector.rs",
+      "extension": "rs",
+      "size": 2088
+    },
+    {
+      "path": "src\\scanner\\filesystem.rs",
+      "extension": "rs",
+      "size": 2612
+    },
+    {
+      "path": "src\\scanner\\ignore.rs",
+      "extension": "rs",
+      "size": 723
+    },
+    {
+      "path": "src\\scanner\\lore_dir.rs",
+      "extension": "rs",
+      "size": 1639
+    },
+    {
+      "path": "src\\scanner\\mod.rs",
+      "extension": "rs",
+      "size": 138
+    },
+    {
+      "path": "src\\scanner\\project_map.rs",
+      "extension": "rs",
+      "size": 438
+    },
+    {
+      "path": "src\\summarizer\\mod.rs",
+      "extension": "rs",
+      "size": 55
+    },
+    {
+      "path": "src\\summarizer\\selector.rs",
+      "extension": "rs",
+      "size": 3217
+    },
+    {
+      "path": "src\\summarizer\\summarizer.rs",
+      "extension": "rs",
+      "size": 5551
+    },
+    {
+      "path": "src\\summarizer\\writer.rs",
+      "extension": "rs",
+      "size": 433
+    }
+  ]
+}
