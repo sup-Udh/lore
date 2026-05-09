@@ -4,13 +4,13 @@
     "Rust"
   ],
   "frameworks": [
-    "Axum",
     "Candle",
-    "Tokio",
+    "Axum",
     "Cargo",
-    "llama.cpp"
+    "llama.cpp",
+    "Tokio"
   ],
-  "file_count": 30,
+  "file_count": 25,
   "file_preview": [
     "Cargo.lock",
     "Cargo.toml",
@@ -27,11 +27,6 @@
     "src\\backends\\llama_cpp.rs",
     "src\\backends\\mod.rs",
     "src\\main.rs",
-    "src\\runtime\\mod.rs",
-    "src\\runtime\\pool.rs",
-    "src\\runtime\\progress.rs",
-    "src\\runtime\\scheduler.rs",
-    "src\\runtime\\worker.rs",
     "src\\scanner\\detector.rs",
     "src\\scanner\\filesystem.rs",
     "src\\scanner\\ignore.rs",

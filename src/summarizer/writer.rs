@@ -17,7 +17,7 @@ pub fn write_summary(
 
     let output_file = summary_dir.join(file_name);
 
-    std::fs::write(output_file, summary)?;
+    std::fs::write(&output_file, summary)?;
 
     Ok(())
 }

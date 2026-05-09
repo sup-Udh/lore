@@ -4,11 +4,11 @@
     "Rust"
   ],
   "frameworks": [
-    "Axum",
     "Candle",
-    "Tokio",
+    "Axum",
     "Cargo",
-    "llama.cpp"
+    "llama.cpp",
+    "Tokio"
   ],
   "files": [
     {
@@ -74,7 +74,7 @@
     {
       "path": "src\\backends\\llama_cpp.rs",
       "extension": "rs",
-      "size": 14808
+      "size": 15430
     },
     {
       "path": "src\\backends\\mod.rs",
@@ -84,32 +84,7 @@
     {
       "path": "src\\main.rs",
       "extension": "rs",
-      "size": 11115
-    },
-    {
-      "path": "src\\runtime\\mod.rs",
-      "extension": "rs",
-      "size": 68
-    },
-    {
-      "path": "src\\runtime\\pool.rs",
-      "extension": "rs",
-      "size": 2177
-    },
-    {
-      "path": "src\\runtime\\progress.rs",
-      "extension": "rs",
-      "size": 3077
-    },
-    {
-      "path": "src\\runtime\\scheduler.rs",
-      "extension": "rs",
-      "size": 253
-    },
-    {
-      "path": "src\\runtime\\worker.rs",
-      "extension": "rs",
-      "size": 2210
+      "size": 9244
     },
     {
       "path": "src\\scanner\\detector.rs",
@@ -159,7 +134,7 @@
     {
       "path": "src\\summarizer\\writer.rs",
       "extension": "rs",
-      "size": 433
+      "size": 434
     }
   ]
 }
