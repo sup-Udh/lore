@@ -109,8 +109,8 @@ async fn main() -> Result<()> {
         
             // PHI3 REPOSITORY ANALYSIS BACKEND
             let mut phi3_backend = LlamaBackend::new(
-                "models/phi3-mini-4k-instruct-q4.gguf",
-                ModelKind::Phi3,
+                "models/qwen2.5-7b-instruct-q4_k_m.gguf",
+                ModelKind::Qwen,
             )?;
         
             println!("[LORE] Selecting important files...");

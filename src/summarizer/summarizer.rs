@@ -2,196 +2,224 @@ use anyhow::Result;
 
 use crate::backends::llama_cpp::LlamaBackend;
 
-fn build_file_prompt(path: &str, code: &str) -> String {
+const SYSTEM_PROMPT: &str =
+    "You are a precise repository compression engine.";
+
+const SMALL_FILE_LINES: usize = 120;
+const LARGE_FILE_LINES: usize = 400;
+
+const SMALL_SUMMARY_TOKENS: i32 = 64;
+const CHUNK_SUMMARY_TOKENS: i32 = 48;
+
+const SAFETY_MARGIN: i32 = 64;
+
+fn build_summary_prompt(path: &str, compressed_code: &str) -> String {
     format!(
         r#"
-Explain this repository file.
+Summarize this repository file.
+
+Return ONLY:
+- purpose
+- key symbols
+- dependencies
+
+Keep concise.
+Maximum 80 tokens.
 
 File:
 {}
 
-Tasks:
-- explain purpose
-- explain role in architecture
-- summarize important logic
-- describe engineering responsibility
-
-Code:
-{}
-"#,
-        path, code
-    )
-}
-
-fn build_chunk_prompt(path: &str, chunk_idx: usize, chunk_total: usize, code: &str) -> String {
-    format!(
-        r#"
-You are summarizing a large repository file in chunks.
-
-File:
-{}
-
-Chunk: {}/{}
-
-Tasks:
-- summarize what this chunk does
-- list key types/functions/constants and their roles
-- note any dependencies on other modules
-- keep it concise but specific
-
-Code chunk:
+Code structure:
 {}
 "#,
         path,
-        chunk_idx + 1,
-        chunk_total,
-        code
+        compressed_code
     )
 }
 
-fn build_merge_prompt(path: &str, chunk_summaries: &str) -> String {
-    format!(
-        r#"
-You are combining chunk summaries into one cohesive engineering summary.
-
-File:
-{}
-
-Chunk summaries:
-{}
-
-Write a single, cohesive summary with:
-- purpose
-- architecture role
-- important logic
-- key APIs (functions/types) and how they interact
-
-Avoid repetition.
-"#,
-        path, chunk_summaries
-    )
+fn approximate_tokens(text: &str) -> usize {
+    // Fast approximation.
+    // Good enough for chunking.
+    text.len() / 4
 }
 
-fn chunk_by_token_budget(
-    backend: &LlamaBackend,
-    path: &str,
-    contents: &str,
-    target_prompt_tokens: usize,
-) -> Result<Vec<String>> {
-    // Greedy line-based packing into chunks, with exact token counting against
-    // the real chat template via backend tokenizer.
-    let lines: Vec<&str> = contents.lines().collect();
-    if lines.is_empty() {
-        return Ok(vec![String::new()]);
-    }
+fn extract_structure(contents: &str) -> String {
+    let mut important = Vec::new();
 
-    let system = "You are a precise software engineering assistant.";
+    for line in contents.lines() {
+        let trimmed = line.trim();
 
-    let mut chunks: Vec<String> = Vec::new();
-    let mut cur = String::new();
-
-    for line in lines {
-        let candidate = if cur.is_empty() {
-            line.to_string()
-        } else {
-            format!("{}\n{}", cur, line)
-        };
-
-        // Use the one-shot prompt format for budget estimation.
-        let user = build_file_prompt(path, &candidate);
-        let n = backend.count_tokens_with_system(system, &user)?;
-
-        if n <= target_prompt_tokens {
-            cur = candidate;
+        // Imports
+        if trimmed.starts_with("use ")
+            || trimmed.starts_with("import ")
+            || trimmed.starts_with("#include")
+        {
+            important.push(trimmed.to_string());
             continue;
         }
 
-        if !cur.is_empty() {
-            chunks.push(cur);
-            cur = String::new();
+        // Rust
+        if trimmed.starts_with("pub struct ")
+            || trimmed.starts_with("struct ")
+            || trimmed.starts_with("pub enum ")
+            || trimmed.starts_with("enum ")
+            || trimmed.starts_with("pub trait ")
+            || trimmed.starts_with("trait ")
+            || trimmed.starts_with("impl ")
+            || trimmed.starts_with("fn ")
+            || trimmed.starts_with("pub fn ")
+        {
+            important.push(trimmed.to_string());
+            continue;
         }
 
-        // If a single line doesn't fit (pathological), hard-truncate.
-        let mut hard = line.to_string();
-        if hard.len() > 1_024 {
-            hard.truncate(1_024);
+        // JS/TS
+        if trimmed.starts_with("export ")
+            || trimmed.starts_with("class ")
+            || trimmed.starts_with("function ")
+            || trimmed.starts_with("async function ")
+            || trimmed.contains("=>")
+        {
+            important.push(trimmed.to_string());
+            continue;
         }
-        loop {
-            let user = build_file_prompt(path, &hard);
-            let n = backend.count_tokens_with_system(system, &user)?;
-            if n <= target_prompt_tokens || hard.len() <= 128 {
-                chunks.push(hard);
-                break;
-            }
-            hard.truncate(hard.len().saturating_sub(128));
+
+        // Comments
+        if trimmed.starts_with("//")
+            || trimmed.starts_with("///")
+            || trimmed.starts_with("/*")
+        {
+            important.push(trimmed.to_string());
         }
     }
 
-    if !cur.is_empty() {
-        chunks.push(cur);
+    if important.is_empty() {
+        // fallback
+        contents
+            .lines()
+            .take(80)
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        important.join("\n")
     }
-
-    Ok(chunks)
 }
 
-// Generates detailed engineering summaries
-// for important repository files.
+fn chunk_structure(
+    compressed: &str,
+    target_tokens: usize,
+) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+
+    for line in compressed.lines() {
+        let candidate = if current.is_empty() {
+            line.to_string()
+        } else {
+            format!("{}\n{}", current, line)
+        };
+
+        if approximate_tokens(&candidate) <= target_tokens {
+            current = candidate;
+        } else {
+            if !current.is_empty() {
+                chunks.push(current);
+            }
+
+            current = line.to_string();
+        }
+    }
+
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+
+    chunks
+}
+
+fn summarize_chunk(
+    backend: &mut LlamaBackend,
+    path: &str,
+    chunk: &str,
+) -> Result<String> {
+    let prompt = build_summary_prompt(path, chunk);
+
+    backend.generate_with_system_limits(
+        SYSTEM_PROMPT,
+        &prompt,
+        CHUNK_SUMMARY_TOKENS,
+    )
+}
+
+// Fast repository-oriented summarization.
 pub fn summarize_file(
     backend: &mut LlamaBackend,
     path: &str,
     contents: &str,
 ) -> Result<String> {
-    // Token-safe summarization:
-    // - if content fits, do one-shot summary
-    // - otherwise chunk + summarize each chunk + merge
-    let system = "You are a precise software engineering assistant.";
 
-    // One-shot attempt with a moderate output budget.
-    let one_shot_max_new = 280;
-    let one_shot_prompt = build_file_prompt(path, contents);
-    let one_shot_tokens = backend.count_tokens_with_system(system, &one_shot_prompt)?;
-    if (one_shot_tokens as i32) + one_shot_max_new <= backend.n_ctx() {
-        return backend.generate_with_system_limits(system, &one_shot_prompt, one_shot_max_new);
+    // --------------------------------------------------
+    // Tiny files
+    // --------------------------------------------------
+
+    let line_count = contents.lines().count();
+
+    if line_count <= SMALL_FILE_LINES {
+        let compressed = extract_structure(contents);
+
+        let prompt = build_summary_prompt(path, &compressed);
+
+        return backend.generate_with_system_limits(
+            SYSTEM_PROMPT,
+            &prompt,
+            SMALL_SUMMARY_TOKENS,
+        );
     }
 
-    // Chunking budget: shrink output budget to reclaim prompt space.
-    let chunk_max_new = 160;
-    let safety_margin: i32 = 64;
-    let target_prompt_tokens: usize = (backend
+    // --------------------------------------------------
+    // Large files
+    // --------------------------------------------------
+
+    let compressed = extract_structure(contents);
+
+    let target_prompt_tokens = backend
         .n_ctx()
-        .saturating_sub(chunk_max_new)
-        .saturating_sub(safety_margin)) as usize;
+        .saturating_sub(CHUNK_SUMMARY_TOKENS)
+        .saturating_sub(SAFETY_MARGIN) as usize;
 
-    let chunks = chunk_by_token_budget(backend, path, contents, target_prompt_tokens)?;
+    let chunks = chunk_structure(
+        &compressed,
+        target_prompt_tokens,
+    );
 
+    // If compression reduced enough,
+    // avoid chunk pipeline entirely.
     if chunks.len() == 1 {
-        let prompt = build_file_prompt(path, &chunks[0]);
-        return backend.generate_with_system_limits(system, &prompt, one_shot_max_new);
+        let prompt = build_summary_prompt(path, &chunks[0]);
+
+        return backend.generate_with_system_limits(
+            SYSTEM_PROMPT,
+            &prompt,
+            SMALL_SUMMARY_TOKENS,
+        );
     }
 
-    // Summarize each chunk.
-    let mut chunk_summaries = String::new();
-    for (i, chunk) in chunks.iter().enumerate() {
-        let prompt = build_chunk_prompt(path, i, chunks.len(), chunk);
-        let summary = backend.generate_with_system_limits(system, &prompt, chunk_max_new)?;
-        chunk_summaries.push_str(&format!(
-            "\n--- Chunk {}/{} ---\n{}\n",
-            i + 1,
-            chunks.len(),
-            summary.trim()
-        ));
+    // --------------------------------------------------
+    // Chunk summaries
+    // --------------------------------------------------
+
+    let mut final_summary = String::new();
+
+    for chunk in chunks {
+        let summary = summarize_chunk(
+            backend,
+            path,
+            &chunk,
+        )?;
+
+        final_summary.push_str(summary.trim());
+        final_summary.push('\n');
     }
 
-    // Merge step.
-    let merge_max_new = 360;
-    let mut compact = chunk_summaries;
-    loop {
-        let merge_prompt = build_merge_prompt(path, &compact);
-        let merge_tokens = backend.count_tokens_with_system(system, &merge_prompt)?;
-        if (merge_tokens as i32) + merge_max_new <= backend.n_ctx() || compact.len() <= 2_000 {
-            return backend.generate_with_system_limits(system, &merge_prompt, merge_max_new);
-        }
-        // Too many chunks: trim oldest tail and retry.
-        compact.truncate(compact.len().saturating_sub(2_000));
-    }
+    Ok(final_summary)
 }
